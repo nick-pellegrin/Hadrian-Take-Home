@@ -1,0 +1,20 @@
+# uv-managed virtual environment
+.venv/
+
+# Python build and cache artifacts
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Default output folder for generated programs (examples/ is committed)
+out/
