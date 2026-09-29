@@ -1,9 +1,34 @@
 # Design notes
 
 This file records the design decisions behind the warm-up generator and the evidence for
-them. Architecture decisions will be added as each phase lands. This first section
-records which controller constructs the generated programs depend on, and how each one
-was verified.
+them. Decisions are added as each part of the generator lands.
+
+## Configuration
+
+Machines (`config/machines.toml`) and warm-up profiles (`config/profiles.toml`) are data.
+Supporting a new machine means adding a TOML table, never editing Python or NC code.
+`cnc_warmup.config` turns both files into the frozen dataclasses in `cnc_warmup.model`.
+
+| Decision | Why |
+|---|---|
+| **TOML**, read with stdlib `tomllib` | It allows comments, which config files full of assumptions need. It is readable by non-programmers and adds no dependency |
+| **Unknown keys are errors**, with a "did you mean" hint | A typo such as `max_feeds` must not silently fall back to a default in a program that moves a machine |
+| **Every problem is reported in one pass**, each with its file and dotted TOML path | Fix everything in one edit, not one error per run. The path also lets the UI put each message under its form field |
+| One problem is reported once, with no knock-on errors | A wrong-type table (`travel = 762`) doesn't also produce "missing x/y/z". Tests assert an exact single issue per case |
+| Axis limits are **machine coordinates** (the Heidenhain M91 / Fanuc G53 frame) | This is what makes the program independent of presets, work offsets and tool offsets |
+| `travel` + `home` shorthand **or** explicit `limits`, never both | Matches the assignment table (travel only) while supporting machines whose datum isn't at an end of travel |
+| `home` is required with `travel` | The coordinate convention is safety-relevant, so it is never assumed silently |
+| Fanuc cancel codes come from a **fixed list** (`G15`, `G50`, `G50.1`, `G69`) | Each needs a control option, so a machine opts in. Free text is never copied into a program |
+| Fanuc O9000–O9999 rejected | That range holds the machine tool builder's macros |
+| Profile defaults are declared once, on the `WarmupProfile` dataclass | The loader reads them from the dataclass, so the defaults can't drift apart |
+| A warm-up only ramps up (`*_start ≤ *_end`), and the sweep pattern must reach all six axis extremes | These encode the assignment's requirements: gradual warm-up, and entire XYZ travel |
+| Machine-dependent limits are checked separately (`check_compatibility`) | Profiles are reusable across the fleet. Only the machine/profile pair can be checked against max feed, spindle speed and travel |
+| CLI `--set` and UI edits go through `apply_overrides`, which re-runs the profile validation | There is one validation path, so an override can never bypass a check |
+
+## Controller syntax verification
+
+This section records which controller constructs the generated programs depend on, and
+how each one was verified.
 
 ## Controller syntax verification
 
