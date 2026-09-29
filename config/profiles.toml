@@ -1,0 +1,49 @@
+# Warm-up profiles: how a warm-up runs, independent of which machine runs it.
+#
+# A program is generated from one machine (machines.toml) plus one profile.
+# Each profile splits its duration into stages. Every stage runs the spindle at
+# one speed and sweeps all axes at one feed, stepping from the start values to
+# the finish values:
+#
+#   stage i: spindle rpm_start -> rpm_end, axes feed_start -> feed_end
+#
+# Each stage holds its spindle speed for at least duration_min / stages. The axes
+# repeat full-travel sweep passes at the stage feed, and a dwell tops up any
+# remaining time. The start feed is chosen so one slow pass still fits in a
+# stage on the largest machine (M3).
+#
+# UNITS: minutes, mm/min, rpm, mm.
+
+[profiles.daily]
+description = "Daily warm-up before the first job of the shift"
+duration_min = 20                        # Haas and Mazak recommend 20-30 min
+stages = 5
+feed_start = 2500                        # mm/min
+feed_end = 12000                         # mm/min, capped by machine max_feed
+rpm_start = 1000
+rpm_end = 10000                          # capped by machine spindle_max_rpm
+ramp = "linear"                          # "linear" or "geometric"
+coolant = "off"                          # "off" or "flood" - flood with an empty spindle sprays the enclosure
+edge_margin_mm = 1.0                     # stop this far inside every travel limit
+pattern = ["perimeter", "diagonals", "z_stroke"]
+z_stroke_at = "center"                   # XY position of the Z stroke: "center" or "start"
+operator_confirm = true                  # checklist stop before the spindle starts
+runtime_guards = true                    # program checks the control's soft limits match this machine
+final_rapid_pass = false                 # finish with full strokes at rapid traverse
+
+[profiles.extended]
+description = "After the spindle has been idle for several days (Haas: more than 4)"
+duration_min = 30
+stages = 6
+feed_start = 2000
+feed_end = 12000
+rpm_start = 500
+rpm_end = 10000
+ramp = "geometric"                       # spends longer at low speed - gentler on cold bearings
+coolant = "off"
+edge_margin_mm = 1.0
+pattern = ["perimeter", "diagonals", "z_stroke"]
+z_stroke_at = "center"
+operator_confirm = true
+runtime_guards = true
+final_rapid_pass = false

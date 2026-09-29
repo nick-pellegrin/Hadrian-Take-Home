@@ -161,19 +161,28 @@ editing it.
 class GenerationRequest:
     machine_id: str
     profile_name: str
-    overrides: Mapping[str, object]          # e.g. {"feed_end": 12000}
+    overrides: Mapping[str, object]  # e.g. {"feed_end": 12000}
     controllers: tuple[Controller, ...]
+
 
 @dataclass(frozen=True)
 class Issue:
-    path: str                                # dotted, e.g. "profile.feed_end"
+    path: str  # dotted, e.g. "profile.feed_end"
     message: str
     severity: Literal["error", "warning"]
 
-def load_catalog(config_dir: Path) -> Catalog: ...          # machines, profiles, load issues
-def preview(catalog: Catalog, req: GenerationRequest) -> Preview: ...
-    # Preview: stage table, estimates, {controller: program text}, issues
+
+def load_catalog(config_dir: Path) -> Catalog:
+    """Machines, profiles, and any load issues."""
+
+
+def preview(catalog: Catalog, req: GenerationRequest) -> Preview:
+    """Stage table, estimates, {controller: program text}, and issues."""
+
+
 def write_programs(preview: Preview, out_dir: Path) -> list[Path]: ...
+
+
 def cli_command(req: GenerationRequest) -> str: ...
 ```
 

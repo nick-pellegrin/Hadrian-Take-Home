@@ -1,0 +1,71 @@
+# Machine definitions for the warm-up generator.
+#
+# Each [machines.<ID>] table defines one machine. Adding a machine to the fleet
+# means adding a table here - no Python or NC code changes.
+#
+# COORDINATES
+#   All positions are MACHINE coordinates: the frame used by Heidenhain M91 and
+#   Fanuc G53, which ignores presets, work offsets and tool offsets.
+#
+#   `travel` + `home = "max"` is shorthand for limits of [-travel, 0] on every
+#   axis. That is the usual vertical machining centre convention: the reference
+#   point sits at the positive end of each axis, with Z fully retracted.
+#   A machine whose datum sits elsewhere gives explicit `limits` instead (see the
+#   commented template at the end of this file).
+#
+# ASSUMPTIONS - not stated in the assignment, confirm per machine:
+#   - The reference point is at the positive end of every axis (home = "max").
+#   - spindle_max_rpm and max_feed are placeholder capability limits. They only
+#     cap what a warm-up profile may command; they are not written to programs.
+#
+# UNITS: mm, mm/min, rpm.
+
+[machines.M1]
+description = "3-axis VMC, 762 x 508 x 500 mm travel"
+controller = "heidenhain"                # default output: "heidenhain" or "fanuc"
+travel = { x = 762, y = 508, z = 500 }
+home = "max"
+spindle_max_rpm = 12000
+max_feed = 20000
+
+[machines.M1.fanuc]
+program_number = 8001                    # O8001 - the O8000-O8999 range can be edit-protected
+cancel_codes = ["G69"]                   # add "G50", "G50.1" only if those options are installed
+
+[machines.M2]
+description = "3-axis VMC, 1016 x 660 x 500 mm travel"
+controller = "heidenhain"
+travel = { x = 1016, y = 660, z = 500 }
+home = "max"
+spindle_max_rpm = 12000
+max_feed = 20000
+
+[machines.M2.fanuc]
+program_number = 8002
+cancel_codes = ["G69"]
+
+[machines.M3]
+description = "3-axis VMC, 1270 x 508 x 500 mm travel"
+controller = "heidenhain"
+travel = { x = 1270, y = 508, z = 500 }
+home = "max"
+spindle_max_rpm = 12000
+max_feed = 20000
+
+[machines.M3.fanuc]
+program_number = 8003
+cancel_codes = ["G69"]
+
+# Template: a machine whose machine datum is NOT at the positive end of travel.
+# Give explicit limits in machine coordinates instead of `travel` + `home`.
+#
+# [machines.M4]
+# description = "3-axis VMC with the machine datum at the table centre"
+# controller = "heidenhain"
+# limits = { x = { min = -400, max = 400 }, y = { min = -300, max = 300 }, z = { min = -550, max = 0 } }
+# spindle_max_rpm = 15000
+# max_feed = 30000
+#
+# [machines.M4.fanuc]
+# program_number = 8004
+# cancel_codes = ["G69"]
