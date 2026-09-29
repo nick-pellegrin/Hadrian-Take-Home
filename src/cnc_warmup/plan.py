@@ -28,7 +28,15 @@ from typing import assert_never
 
 from cnc_warmup.config import ConfigError, check_compatibility
 from cnc_warmup.issues import Issue, Severity
-from cnc_warmup.model import AxisLimits, Coolant, Machine, SweepMove, WarmupProfile, ZStrokeAt
+from cnc_warmup.model import (
+    Axis,
+    AxisLimits,
+    Coolant,
+    Machine,
+    SweepMove,
+    WarmupProfile,
+    ZStrokeAt,
+)
 from cnc_warmup.ramp import ramp_values
 
 # Positions are rounded to the finest resolution the posts write (0.001 mm), so the
@@ -85,6 +93,9 @@ class Envelope:
             _round((self.x.min + self.x.max) / 2), _round((self.y.min + self.y.max) / 2), self.z.max
         )
 
+    def limits(self, axis: Axis) -> AxisLimits:
+        return {Axis.X: self.x, Axis.Y: self.y, Axis.Z: self.z}[axis]
+
 
 @dataclass(frozen=True)
 class Segment:
@@ -109,6 +120,13 @@ class Stage:
 
 
 # --- Steps: the program, in order -----------------------------------------------
+
+
+@dataclass(frozen=True)
+class Section:
+    """Start of a program section. Posts render the title as a heading comment."""
+
+    title: str
 
 
 @dataclass(frozen=True)
@@ -175,7 +193,8 @@ class ProgramEnd:
 
 
 Step = (
-    SafeStart
+    Section
+    | SafeStart
     | SpindleStop
     | CoolantOff
     | CoolantOn
@@ -320,21 +339,36 @@ def _steps(
     top = envelope.z.max
     start, park = envelope.start, envelope.center
 
-    steps: list[Step] = [SafeStart(), SpindleStop(), CoolantOff()]
+    steps: list[Step] = [
+        Section("Safe start: spindle and coolant off"),
+        SafeStart(),
+        SpindleStop(),
+        CoolantOff(),
+    ]
     if profile.runtime_guards:
-        steps.append(RuntimeGuard(envelope))
+        steps += [
+            Section("Travel check: the soft limits of the control must contain the sweep"),
+            RuntimeGuard(envelope),
+        ]
     if profile.operator_confirm:
-        steps.append(OperatorStop((*CHECKLIST, COOLANT_CHECK) if flood else CHECKLIST))
+        steps += [
+            Section("Operator check"),
+            OperatorStop((*CHECKLIST, COOLANT_CHECK) if flood else CHECKLIST),
+        ]
     steps += [
+        Section("To the start corner: Z up first, then XY"),
         RapidMove(Position(z=top), "retract Z to the top of travel first"),
         RapidMove(Position(x=start.x, y=start.y), "to the sweep start corner"),
+        Section("Spindle on, flood coolant on" if flood else "Spindle on"),
         SpindleOn(stages[0].rpm),
     ]
     if flood:
         steps.append(CoolantOn())
-    steps += [RunStage(stage) for stage in stages]
+    for stage in stages:
+        steps += [Section(_stage_title(stage, len(stages))), RunStage(stage)]
     if profile.final_rapid_pass:
-        steps.append(RapidSweep())
+        steps += [Section("Final sweep at rapid traverse"), RapidSweep()]
+    steps.append(Section(f"Shutdown: {'coolant and ' if flood else ''}spindle off, Z up, park"))
     if flood:
         steps.append(CoolantOff())
     steps += [
@@ -346,6 +380,15 @@ def _steps(
     return tuple(steps)
 
 
+def _stage_title(stage: Stage, total: int) -> str:
+    passes = f"{stage.passes} pass" + ("es" if stage.passes > 1 else "")
+    dwell = f", then {format_number(stage.dwell_seconds)} s dwell" if stage.dwell_seconds else ""
+    return (
+        f"Stage {stage.number} of {total}: {format_number(stage.rpm)} rpm, "
+        f"{format_number(stage.feed)} mm/min, {passes}{dwell}"
+    )
+
+
 def _overrun_warnings(
     machine: Machine, profile: WarmupProfile, stages: tuple[Stage, ...]
 ) -> tuple[Issue, ...]:
@@ -355,7 +398,7 @@ def _overrun_warnings(
             f"profiles.{profile.name}.feed_start",
             f"stage {stage.number} runs {format_duration(stage.seconds)}, over its "
             f"{format_duration(budget)} share of the duration: one sweep pass at "
-            f"{stage.feed:g} mm/min takes that long on machine {machine.id}. "
+            f"{format_number(stage.feed)} mm/min takes that long on machine {machine.id}. "
             "Raise feed_start or duration_min",
             Severity.WARNING,
         )
@@ -428,7 +471,7 @@ def trace(plan: WarmupPlan) -> tuple[Event, ...]:
                     events.append(Dwell(stage.dwell_seconds, rpm))
             case RapidSweep():
                 sweep(None)
-            case SafeStart() | RuntimeGuard() | OperatorStop() | ProgramEnd():
+            case Section() | SafeStart() | RuntimeGuard() | OperatorStop() | ProgramEnd():
                 pass
             case _:
                 assert_never(step)
@@ -442,6 +485,12 @@ def format_duration(seconds: float) -> str:
     """Format as m:ss, e.g. 208.4 -> '3:28'."""
     minutes, secs = divmod(round(seconds), 60)
     return f"{minutes}:{secs:02d}"
+
+
+def format_number(value: float) -> str:
+    """Format at the plan's 0.001 resolution without trailing zeros: 2500.0 -> '2500'."""
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text
 
 
 def _path_length(start: Point, segments: tuple[Segment, ...]) -> float:

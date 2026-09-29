@@ -49,6 +49,7 @@ files = ["src", "tests"]
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
+pythonpath = ["tests"]  # shared test helpers, e.g. `import strategies`
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 xfail_strict = true
 

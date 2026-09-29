@@ -42,6 +42,7 @@ safe start ─► [runtime guard] ─► [operator stop] ─► retract Z ─►
 | Decision | Why |
 |---|---|
 | The plan is an explicit, ordered list of steps | The order is the safety property. It is tested once, on the plan, rather than separately in each dialect |
+| Section headings (`Section` steps: safe start, travel check, stage n, shutdown) are part of the plan | Both posts get the same structure and wording. The stage titles carry the RPM, feed, passes and dwell |
 | The guard and the operator checklist come **before any motion**, and the spindle starts only after the retract | Nothing moves before the program has checked it is on the right machine and a person has confirmed the checklist. Nothing spins before Z is clear |
 | The first move is **Z only**, straight up to the top of travel | Z-up is the one move that is safe from any starting position. XY follows at the top |
 | All positions are machine coordinates, inside an **envelope**: the travel inset by `edge_margin_mm` | Position doesn't depend on presets or offsets. The margin keeps servo overshoot from tripping an overtravel alarm |
@@ -55,6 +56,38 @@ safe start ─► [runtime guard] ─► [operator stop] ─► retract Z ─►
 | Park at the XY center with Z at the top | A neutral position that leaves the table accessible |
 | The runtime estimate covers the stages only | Rapid positioning and acceleration are excluded, and the optional rapid pass is estimated at `max_feed`, because the machine's rapid rate isn't configured. The estimate is labeled as such in the output |
 | `trace(plan)` flattens the plan into moves and dwells | Property tests check the safety invariants on it across random machines and profiles. Phase 6 compares it with the programs parsed back from each post |
+
+## Heidenhain TNC 640 post
+
+`cnc_warmup.posts.heidenhain.render(plan)` writes the plan as a Klartext program. The
+examples for M1–M3 are in `examples/heidenhain/`. The golden tests pin them byte for
+byte; regenerate them with `uv run pytest --update-golden`.
+
+| Decision | Why |
+|---|---|
+| Klartext (`.H`), not the TNC's ISO dialect (`.I`) | The assignment asks for Klartext. It is also the TNC's native, most readable format |
+| Every move is `L … R0 FMAX\|FQL1 M91` | M91 = machine coordinates, ignoring presets, datum shifts and tool length (manual §7.3). R0 because radius compensation would otherwise still apply |
+| No reset block at the start | M91 already ignores every coordinate transformation. `PLANE RESET` is avoided because tilting (option 8) may be missing on a 3-axis machine |
+| The sweep is written **once**, as `LBL "SWEEP"` after `M30`. Each stage sets `QL1 = <feed>` and calls it | Short, idiomatic program. The stage table reads straight from the main program. QL parameters are local to the program, so they can't collide with Q parameters used by OEM or HEIDENHAIN cycles |
+| Repeated passes use a program-section repeat (`LBL n` … `CALL LBL n REP passes-1`) | REP counts *extra* runs (manual §8.3). Stage numbers make unique, non-zero labels |
+| Speed changes use `TOOL CALL S…` with no tool number, and a redundant change is skipped | With no tool number or axis, the control changes only the speed and never runs the tool-change macro (manual §4.1) |
+| Dwell uses Cycle 9 (`CYCL DEF 9.0/9.1`) | Supported by every TNC 640 software version. `FUNCTION DWELL` needs newer software |
+| Travel check: `FN 18 ID230 NR2/NR3` reads the soft limits into QL10–QL15, and `FN 11`/`FN 12` jump to `LBL "TRAVEL_ERR"`, which raises `FN 14: ERROR = 1004` ("Range exceeded") | Runs before anything moves. The values stay visible in the Q-parameter status display, which helps diagnose a mismatch |
+| The operator `STOP` comes before the spindle starts | `M0`/`STOP` would stop a running spindle. Nothing is running yet, so the program resumes cleanly on NC start |
+| The program name is `WARMUP_<MACHINE>_<PROFILE>`, and the file name matches `BEGIN`/`END PGM` | Profiles don't collide on the control, and the TNC finds the name it expects |
+| ASCII only, CRLF, upper-case comments with `;`, `~` and quotes removed | `;` would open a nested comment, a trailing `~` continues a block, and quotes delimit labels. CRLF is the TNC's native line ending |
+| The header lists the settings, the sweep envelope and the stage table, but **no timestamp** | The operator sees what will run. Regenerating produces identical bytes, so diffs and golden tests only show real changes |
+| Section headings are structure items (`* - …`) | They appear in the TNC's program structure window, so each stage can be found at a glance |
+
+**Size:** the daily programs are **106 blocks**, or 87 with `runtime_guards = false`. The
+free programming-station demo is limited to 100 blocks. SPK05 in the spike will show
+whether that limit stops a program from running or only from being edited. Until then,
+validate in the demo with the guards turned off.
+
+**Constructs still to confirm in the programming station** (see the table below):
+`TOOL CALL S…` (H9), feed from `QL1` (H4), `FN 18 ID230` values and frame (H6–H7), and
+`FN 14` 1004 text (H18). Each has a one-line fallback in the post: `FEED_PARAM`, the
+`TOOL CALL` format, or turning the guard off.
 
 ## Controller syntax verification
 

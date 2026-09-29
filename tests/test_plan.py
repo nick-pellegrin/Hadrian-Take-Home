@@ -1,19 +1,9 @@
 import pytest
 from hypothesis import given, settings
-from hypothesis import strategies as st
 
 from cnc_warmup.config import Catalog, ConfigError, apply_overrides
 from cnc_warmup.issues import Severity
-from cnc_warmup.model import (
-    Axis,
-    AxisLimits,
-    Coolant,
-    Machine,
-    Ramp,
-    SweepMove,
-    WarmupProfile,
-    ZStrokeAt,
-)
+from cnc_warmup.model import Axis, Coolant, ZStrokeAt
 from cnc_warmup.plan import (
     CHECKLIST,
     COOLANT_CHECK,
@@ -30,13 +20,16 @@ from cnc_warmup.plan import (
     RunStage,
     RuntimeGuard,
     SafeStart,
+    Section,
     SpindleOn,
     SpindleStop,
     WarmupPlan,
     build_plan,
     format_duration,
+    format_number,
     trace,
 )
+from strategies import plans
 
 
 @pytest.fixture
@@ -47,6 +40,11 @@ def m1_daily(catalog: Catalog) -> WarmupPlan:
 def plan_with(catalog: Catalog, machine_id: str = "M1", **changes: object) -> WarmupPlan:
     profile = apply_overrides(catalog.profile("daily"), changes)
     return build_plan(catalog.machine(machine_id), profile)
+
+
+def step_types(plan: WarmupPlan) -> list[type]:
+    """The program's steps without the section headings."""
+    return [type(step) for step in plan.steps if not isinstance(step, Section)]
 
 
 # --- Examples on the shipped configuration ----------------------------------------
@@ -84,7 +82,7 @@ def test_stage_table(m1_daily: WarmupPlan) -> None:
 
 
 def test_step_order(m1_daily: WarmupPlan) -> None:
-    assert [type(step) for step in m1_daily.steps] == [
+    assert step_types(m1_daily) == [
         SafeStart,
         SpindleStop,
         CoolantOff,
@@ -98,6 +96,24 @@ def test_step_order(m1_daily: WarmupPlan) -> None:
         RapidMove,  # retract Z
         RapidMove,  # park
         ProgramEnd,
+    ]
+
+
+def test_section_titles(m1_daily: WarmupPlan) -> None:
+    titles = [step.title for step in m1_daily.steps if isinstance(step, Section)]
+
+    assert titles == [
+        "Safe start: spindle and coolant off",
+        "Travel check: the soft limits of the control must contain the sweep",
+        "Operator check",
+        "To the start corner: Z up first, then XY",
+        "Spindle on",
+        "Stage 1 of 5: 1000 rpm, 2500 mm/min, 1 pass, then 89 s dwell",
+        "Stage 2 of 5: 3250 rpm, 4880 mm/min, 3 passes, then 8 s dwell",
+        "Stage 3 of 5: 5500 rpm, 7250 mm/min, 4 passes, then 32 s dwell",
+        "Stage 4 of 5: 7750 rpm, 9630 mm/min, 6 passes, then 5 s dwell",
+        "Stage 5 of 5: 10000 rpm, 12000 mm/min, 7 passes, then 20 s dwell",
+        "Shutdown: spindle off, Z up, park",
     ]
 
 
@@ -121,7 +137,7 @@ def test_disabled_guard_and_operator_stop_are_left_out(catalog: Catalog) -> None
 
 def test_flood_coolant_runs_only_while_the_spindle_does(catalog: Catalog) -> None:
     plan = plan_with(catalog, coolant=Coolant.FLOOD)
-    kinds = [type(step) for step in plan.steps]
+    kinds = step_types(plan)
 
     assert kinds[kinds.index(SpindleOn) + 1] is CoolantOn
     assert kinds[-5:] == [CoolantOff, SpindleStop, RapidMove, RapidMove, ProgramEnd]
@@ -131,7 +147,7 @@ def test_flood_coolant_runs_only_while_the_spindle_does(catalog: Catalog) -> Non
 
 def test_final_rapid_pass_follows_the_last_stage(catalog: Catalog) -> None:
     plan = plan_with(catalog, final_rapid_pass=True)
-    kinds = [type(step) for step in plan.steps]
+    kinds = step_types(plan)
     base = plan_with(catalog)
 
     assert kinds[kinds.index(RapidSweep) - 1] is RunStage
@@ -175,47 +191,15 @@ def test_format_duration(seconds: float, expected: str) -> None:
     assert format_duration(seconds) == expected
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(2500.0, "2500"), (-761.5, "-761.5"), (0.1236, "0.124"), (-0.0001, "0"), (1e-9, "0")],
+)
+def test_format_number(value: float, expected: str) -> None:
+    assert format_number(value) == expected
+
+
 # --- Properties over random machines and profiles ---------------------------------
-
-
-@st.composite
-def machines(draw: st.DrawFn) -> Machine:
-    def axis() -> AxisLimits:
-        low = draw(st.integers(min_value=-3000, max_value=0))
-        return AxisLimits(low, low + draw(st.integers(min_value=200, max_value=3000)))
-
-    return Machine(id="MX", x=axis(), y=axis(), z=axis(), spindle_max_rpm=30_000, max_feed=30_000)
-
-
-@st.composite
-def profiles(draw: st.DrawFn) -> WarmupProfile:
-    feeds = sorted(draw(st.lists(st.floats(500, 20_000), min_size=2, max_size=2)))
-    rpms = sorted(draw(st.lists(st.floats(100, 20_000), min_size=2, max_size=2)))
-    xy = draw(
-        st.lists(
-            st.sampled_from([SweepMove.PERIMETER, SweepMove.DIAGONALS]),
-            min_size=1,
-            max_size=2,
-            unique=True,
-        )
-    )
-    return WarmupProfile(
-        name="random",
-        duration_min=draw(st.floats(1, 60)),
-        stages=draw(st.integers(2, 20)),
-        feed_start=feeds[0],
-        feed_end=feeds[1],
-        rpm_start=rpms[0],
-        rpm_end=rpms[1],
-        ramp=draw(st.sampled_from(Ramp)),
-        coolant=draw(st.sampled_from(Coolant)),
-        edge_margin_mm=draw(st.floats(0, 25)),
-        pattern=tuple(draw(st.permutations([*xy, SweepMove.Z_STROKE]))),
-        z_stroke_at=draw(st.sampled_from(ZStrokeAt)),
-        operator_confirm=draw(st.booleans()),
-        runtime_guards=draw(st.booleans()),
-        final_rapid_pass=draw(st.booleans()),
-    )
 
 
 def motions(plan: WarmupPlan) -> list[Motion]:
@@ -224,9 +208,6 @@ def motions(plan: WarmupPlan) -> list[Motion]:
 
 def coordinates(position: Position) -> dict[Axis, float | None]:
     return {Axis.X: position.x, Axis.Y: position.y, Axis.Z: position.z}
-
-
-plans = st.builds(build_plan, machines(), profiles())
 
 
 @settings(max_examples=150)
@@ -249,9 +230,9 @@ def test_every_stage_sweeps_the_entire_travel(plan: WarmupPlan) -> None:
         Axis.Y: {target.y for target in targets},
         Axis.Z: {target.z for target in targets},
     }
-    envelope = {Axis.X: plan.envelope.x, Axis.Y: plan.envelope.y, Axis.Z: plan.envelope.z}
 
-    for axis, limits in envelope.items():
+    for axis in Axis:
+        limits = plan.envelope.limits(axis)
         assert {limits.min, limits.max} <= visited[axis]
     assert plan.sweep[-1].target == plan.envelope.start  # closed, so passes chain
 
@@ -278,16 +259,13 @@ def test_feed_and_speed_ramp_up_from_start_to_finish(plan: WarmupPlan) -> None:
 @given(plans)
 def test_program_starts_safely(plan: WarmupPlan) -> None:
     first_move = next(i for i, step in enumerate(plan.steps) if isinstance(step, RapidMove))
-    before_motion = plan.steps[:first_move]
+    before_motion = {type(step) for step in plan.steps[:first_move]}
     all_motions = motions(plan)
 
     # Nothing moves until spindle and coolant are off and any guard/checklist has run.
-    assert isinstance(before_motion[0], SafeStart)
-    assert {SpindleStop, CoolantOff} <= {type(step) for step in before_motion}
-    if plan.profile.runtime_guards:
-        assert any(isinstance(step, RuntimeGuard) for step in before_motion)
-    if plan.profile.operator_confirm:
-        assert any(isinstance(step, OperatorStop) for step in before_motion)
+    assert {SafeStart, SpindleStop, CoolantOff} <= before_motion
+    assert (RuntimeGuard in before_motion) == plan.profile.runtime_guards
+    assert (OperatorStop in before_motion) == plan.profile.operator_confirm
     # The first move lifts Z straight to the top of travel, with the spindle stopped.
     assert all_motions[0] == Motion(Position(z=plan.envelope.z.max), None, 0.0, False)
     # Feed moves only ever run with the spindle turning.
