@@ -1,13 +1,9 @@
-"""Checks on the configuration shipped in config/, loaded through the real loader."""
-
-from pathlib import Path
+"""Checks on the configuration shipped in config/ (the `catalog` fixture, see conftest.py)."""
 
 import pytest
 
-from cnc_warmup.config import Catalog, ConfigError, check_compatibility, load_catalog
+from cnc_warmup.config import Catalog, ConfigError, check_compatibility
 from cnc_warmup.model import Axis
-
-CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 
 # Travel in mm, copied from the machine table in the assignment.
 ASSIGNMENT_TRAVEL = {
@@ -15,11 +11,6 @@ ASSIGNMENT_TRAVEL = {
     "M2": {"x": 1016, "y": 660, "z": 500},
     "M3": {"x": 1270, "y": 508, "z": 500},
 }
-
-
-@pytest.fixture(scope="module")
-def catalog() -> Catalog:
-    return load_catalog(CONFIG_DIR)
 
 
 def test_machines_match_assignment_table(catalog: Catalog) -> None:

@@ -60,3 +60,5 @@ patch = ["subprocess"]  # also measure `python -m cnc_warmup` runs started by te
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+# Exhaustiveness guards: mypy proves these unreachable.
+exclude_also = ["case _:\\s*\\n\\s*assert_never\\("]

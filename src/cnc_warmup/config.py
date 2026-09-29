@@ -46,6 +46,7 @@ MAX_DURATION_MIN = 240
 MIN_STAGES = 2  # a ramp needs at least a start stage and a finish stage
 MAX_STAGES = 20
 MAX_EDGE_MARGIN_MM = 25
+MIN_SWEEP_TRAVEL_MM = 1  # travel an axis must keep after the edge margin at both ends
 
 # Machine IDs become part of program and file names, e.g. WARMUP_M1.H.
 _MACHINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,15}")
@@ -417,12 +418,13 @@ def check_compatibility(machine: Machine, profile: WarmupProfile) -> list[Issue]
         )
     for axis in Axis:
         travel = machine.limits(axis).travel
-        if 2 * profile.edge_margin_mm >= travel:
+        if travel - 2 * profile.edge_margin_mm < MIN_SWEEP_TRAVEL_MM:
             issues.append(
                 Issue(
                     _join(path, "edge_margin_mm"),
-                    f"{_fmt(profile.edge_margin_mm)} mm on each end leaves no {axis.upper()} "
-                    f"travel on machine {machine.id} ({_fmt(travel)} mm)",
+                    f"{_fmt(profile.edge_margin_mm)} mm on each end leaves less than "
+                    f"{MIN_SWEEP_TRAVEL_MM} mm of {axis.upper()} travel on machine {machine.id} "
+                    f"({_fmt(travel)} mm)",
                 )
             )
     return issues

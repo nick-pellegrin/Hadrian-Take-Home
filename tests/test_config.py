@@ -521,8 +521,8 @@ def test_compatibility_flags_what_the_machine_cannot_do() -> None:
         "profiles.daily.feed_end: 12000 mm/min exceeds the max_feed of machine SMALL "
         "(10000 mm/min)",
         "profiles.daily.rpm_end: 10000 rpm exceeds the spindle_max_rpm of machine SMALL (8000 rpm)",
-        "profiles.daily.edge_margin_mm: 25 mm on each end leaves no Z travel on machine SMALL "
-        "(40 mm)",
+        "profiles.daily.edge_margin_mm: 25 mm on each end leaves less than 1 mm of Z travel "
+        "on machine SMALL (40 mm)",
     ]
 
 

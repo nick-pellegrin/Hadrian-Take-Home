@@ -25,6 +25,37 @@ Supporting a new machine means adding a TOML table, never editing Python or NC c
 | Machine-dependent limits are checked separately (`check_compatibility`) | Profiles are reusable across the fleet. Only the machine/profile pair can be checked against max feed, spindle speed and travel |
 | CLI `--set` and UI edits go through `apply_overrides`, which re-runs the profile validation | There is one validation path, so an override can never bypass a check |
 
+## Planner
+
+`cnc_warmup.plan.build_plan(machine, profile)` returns a controller-neutral `WarmupPlan`.
+It contains an ordered list of **steps** (the program), one **sweep pass** that every
+stage repeats, and a **stage table** (RPM, feed, passes, dwell). The post-processors only
+translate it into Klartext or Fanuc code. Every safety-relevant decision is therefore made
+once, here, for both controls.
+
+```
+safe start ─► [runtime guard] ─► [operator stop] ─► retract Z ─► XY to start corner
+   ─► spindle on [+ coolant] ─► stages 1..N ─► [rapid pass] ─► [coolant off]
+   ─► spindle stop ─► retract Z ─► park XY ─► end
+```
+
+| Decision | Why |
+|---|---|
+| The plan is an explicit, ordered list of steps | The order is the safety property. It is tested once, on the plan, rather than separately in each dialect |
+| The guard and the operator checklist come **before any motion**, and the spindle starts only after the retract | Nothing moves before the program has checked it is on the right machine and a person has confirmed the checklist. Nothing spins before Z is clear |
+| The first move is **Z only**, straight up to the top of travel | Z-up is the one move that is safe from any starting position. XY follows at the top |
+| All positions are machine coordinates, inside an **envelope**: the travel inset by `edge_margin_mm` | Position doesn't depend on presets or offsets. The margin keeps servo overshoot from tripping an overtravel alarm |
+| The envelope is rounded **inward** to 0.001 mm | A property-based test found that rounding to nearest could push the envelope 0.0004 mm past the margin, so it now rounds inward. The config also requires at least 1 mm of travel left after the margins |
+| One **closed** sweep pass that reaches all six axis extremes | Passes chain without repositioning, every pass covers the entire travel, and the Heidenhain post can render it once as a subprogram |
+| Sweep = perimeter (X and Y strokes) + XY diagonals (two drives interpolating together) + Z stroke | Covers each axis end to end, plus simultaneous multi-axis motion. The Z stroke runs over the XY center by default, or at the start corner if configured |
+| **Time-based stages:** each stage holds its RPM for `duration_min / stages`. The axes repeat whole passes at the stage feed, then a spindle-only dwell fills the remainder | Spindle warm-up needs time at each speed, while the axes should keep moving. Stages end within 1 s of their share |
+| A stage whose single pass overruns its share is a **warning**, not an error | The program is still safe, just longer. The warning names the stage and the fix (raise `feed_start` or `duration_min`) |
+| Intermediate feeds and RPMs are rounded to 10, endpoints kept exactly | Readable programs (`S3250`, `F4880`), while honoring the configured start and finish values. Rounding can never break monotonicity |
+| The runtime guard checks that the **commanded envelope** fits inside the control's soft limits | This is the exact safety condition. It catches a program generated for a larger machine. A program for a *smaller* machine still passes, which is safe but sweeps less than the full travel |
+| Park at the XY center with Z at the top | A neutral position that leaves the table accessible |
+| The runtime estimate covers the stages only | Rapid positioning and acceleration are excluded, and the optional rapid pass is estimated at `max_feed`, because the machine's rapid rate isn't configured. The estimate is labeled as such in the output |
+| `trace(plan)` flattens the plan into moves and dwells | Property tests check the safety invariants on it across random machines and profiles. Phase 6 compares it with the programs parsed back from each post |
+
 ## Controller syntax verification
 
 This section records which controller constructs the generated programs depend on, and
