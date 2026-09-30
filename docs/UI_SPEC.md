@@ -154,40 +154,40 @@ editing it.
                nicegui, tomlkit             stdlib only
 ```
 
-**The application service** is new in the core, and **the CLI uses it too**:
+**The application service** (`cnc_warmup.service`) already exists, and the CLI uses it:
 
 ```python
 @dataclass(frozen=True)
 class GenerationRequest:
     machine_id: str
     profile_name: str
-    overrides: Mapping[str, object]  # e.g. {"feed_end": 12000}
-    controllers: tuple[Controller, ...]
+    overrides: Mapping[str, object] = field(default_factory=dict)  # {"feed_end": 12000}
+    controllers: tuple[Controller, ...] = ()  # empty: the machine's controller
 
 
 @dataclass(frozen=True)
-class Issue:
-    path: str  # dotted, e.g. "profile.feed_end"
-    message: str
-    severity: Literal["error", "warning"]
+class Preview:
+    request: GenerationRequest
+    plan: WarmupPlan | None  # None when the request itself is invalid
+    programs: tuple[Program, ...]  # rendered and verified by round-trip
+    issues: tuple[Issue, ...]  # .errors / .warnings
 
 
-def load_catalog(config_dir: Path) -> Catalog:
-    """Machines, profiles, and any load issues."""
+def preview(catalog: Catalog, request: GenerationRequest) -> Preview: ...
 
 
-def preview(catalog: Catalog, req: GenerationRequest) -> Preview:
-    """Stage table, estimates, {controller: program text}, and issues."""
+def write_programs(result: Preview, out_dir: Path) -> list[Path]: ...
 
 
-def write_programs(preview: Preview, out_dir: Path) -> list[Path]: ...
-
-
-def cli_command(req: GenerationRequest) -> str: ...
+def cli_command(request: GenerationRequest) -> str: ...
 ```
 
+`Issue` (`cnc_warmup.issues`) has `path`, `message`, `severity` and `source`.
+
 - Each `Issue.path` maps to a form field, so the message appears **under that field**.
-  Issues with no matching field (plan warnings) appear in the Summary tab.
+  Profile paths look like `profiles.daily.feed_end`, so the field is the last segment.
+  Issues with no matching field (plan warnings, verification failures) appear in the
+  Summary tab.
 - `persist.py` saves profiles with `tomlkit`, which keeps the comments and layout in
   `profiles.toml`. This lives in the UI extra because the CLI never writes config.
 - **State:** one `FormState` dataclass per browser tab (NiceGUI `@ui.page`), converted
