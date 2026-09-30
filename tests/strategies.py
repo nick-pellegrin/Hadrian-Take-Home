@@ -5,6 +5,8 @@ from hypothesis import strategies as st
 from cnc_warmup.model import (
     AxisLimits,
     Coolant,
+    FanucCancelCode,
+    FanucSettings,
     Machine,
     Ramp,
     SweepMove,
@@ -20,7 +22,19 @@ def machines(draw: st.DrawFn) -> Machine:
         low = draw(st.integers(min_value=-3000, max_value=0))
         return AxisLimits(low, low + draw(st.integers(min_value=200, max_value=3000)))
 
-    return Machine(id="MX", x=axis(), y=axis(), z=axis(), spindle_max_rpm=30_000, max_feed=30_000)
+    fanuc = FanucSettings(
+        program_number=draw(st.integers(min_value=1, max_value=8999)),
+        cancel_codes=tuple(draw(st.lists(st.sampled_from(FanucCancelCode), unique=True))),
+    )
+    return Machine(
+        id="MX",
+        x=axis(),
+        y=axis(),
+        z=axis(),
+        spindle_max_rpm=30_000,
+        max_feed=30_000,
+        fanuc=fanuc,
+    )
 
 
 @st.composite

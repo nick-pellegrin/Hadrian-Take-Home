@@ -89,6 +89,37 @@ validate in the demo with the guards turned off.
 `FN 14` 1004 text (H18). Each has a one-line fallback in the post: `FEED_PARAM`, the
 `TOOL CALL` format, or turning the guard off.
 
+## Fanuc 31i post
+
+`cnc_warmup.posts.fanuc.render(plan)` writes the same plan as an ISO G-code program. The
+examples are in `examples/fanuc/` and are pinned byte for byte, like the Heidenhain ones.
+
+| Decision | Why |
+|---|---|
+| Positioning moves are always `G90 G53 G00` | `G53` means machine coordinates, so no work offset (G54–G59, G52, external offset) applies. It is one-shot and **ignored in G91**, so it is always written together with `G90` |
+| Sweep feed moves are `G91 G01` increments, starting right after a `G53` move to the start corner | `G53` always moves at rapid, so it can't do feed moves. An increment from a machine-coordinate point is just as independent of work offsets. Increments are differences of points on the 0.001 mm grid, so no rounding error accumulates, and every pass returns exactly to its start |
+| The retract uses `G90 G53 G00 Z<top>`, not `G91 G28 Z0.` | `G28` goes to the reference point, which is the top of Z only when home is at the + end. Using the configured top keeps Fanuc identical to Heidenhain's M91 behavior for every `home`/`limits` setting |
+| Safe start is `G21` on its own line, then `G17 G40 G49 G80 G90 G94`, then the machine's opted-in cancel codes (`G15`, `G50`, `G50.1 X0. Y0. Z0.`, `G69`) | Units come first, before any coordinates. Length compensation and cutter compensation are cancelled. Rotation, scaling and mirroring would distort G91 increments, but their cancel codes raise alarms on controls without the option, so each machine opts in |
+| Every coordinate has a decimal point (`X760.`). `S` is whole rpm. Dwell is `G04 P<ms>` | With parameter 3401#0 = 0, `X760` means 0.760 mm. `G04 P` takes integer milliseconds and avoids any doubt that a dwell `X` might move the X axis during G91 |
+| Passes are written out in full, with no macro loops or `M98` subprograms | The program runs on any 31i without Custom Macro, and any backplotter can read it. `M98 Q` local subprograms need parameter 6005#0. The cost is longer files (~300 lines for M1 daily) |
+| **Each stage re-anchors** (`N100 G90 G53 G00 <start corner>`), restates `S… M03` and coolant, and starts a new `G91` run | Any stage N-number is a safe restart point. The header warns never to restart mid-pass, because the passes are incremental |
+| Travel check: `IF [PRM[1321]/[n] GT <min>] THEN #3000=1(SWEEP EXCEEDS X- LIMIT)`, and the same with 1320/LT for the + side | Same safety condition as Heidenhain: the stored stroke limits must contain the sweep. It needs Custom Macro plus `PRM[]` (30i-B family), so it stays behind `runtime_guards`. Messages are kept to 26 characters or fewer for older alarm displays |
+| The operator check is a plain `M00`, with the checklist as comments | Universal: needs no macro option. It comes before the spindle starts |
+| The final rapid pass is `G91 G00` | Fanuc `G00` may move each axis independently (a dog-leg path) unless parameter 1401#1 is set. The corner-to-corner moves still stay inside the envelope rectangle |
+| Comments are upper-case ASCII, with parentheses, `;`, `%` and `:` removed. Durations are written `19M57S` | Parentheses would end the comment. `%` is end-of-tape and `;` is end-of-block to some transfer tools. `:` is an alternative program-number address |
+| The program is `O<number>` from `[machines.<id>.fanuc]`, and the file is `O8001_M1_DAILY.nc`, with LF line endings | O-numbers are per machine, so both profiles of a machine share `O8001`: load one at a time. `.gitattributes` keeps `.nc` files byte for byte |
+
+**Tests:** the Fanuc linter in `tests/test_fanuc.py` simulates the program's moves. It
+fails:
+- any axis move in work coordinates;
+- any `G53` not written with `G90`;
+- any axis word without a decimal point;
+- any feed move without a feed rate or a running spindle;
+- any position outside the sweep envelope.
+
+It runs on the examples and on 100 random plans, and is itself mutation-tested with 14
+kinds of broken program.
+
 ## Controller syntax verification
 
 This section records which controller constructs the generated programs depend on, and
@@ -149,3 +180,6 @@ that depend on the control model are behind configuration flags.
 | F6 | `PRM[1320]/[axis]`, `PRM[1321]/[axis]` read the stroke limits | Runtime soft-limit guard | MMS "Accessing parameter values…"; 30i-B | Documented; **model-dependent** (flag) |
 | F7 | `G50`/`G51`, `G68`/`G69`, `G50.1` raise alarms without their options | Configurable modal-cancel line | Fanuc option list | Documented |
 | F8 | O8000–O8999 can be edit-protected; O9000+ belong to the MTB | Program-number range | Fanuc program number areas | Documented |
+| F9 | `IF [<expr>] THEN #3000=1(<message>)` is a valid single-line alarm | Travel check | Custom Macro B IF-THEN form | Documented; unverified on a control |
+| F10 | `PRM[1320]/[n]` returns the stroke limit in mm (not detection units) | Travel check compares it with mm values | 30i-series parameters are real-number type | **Unverified**: if it returns detection units, the check misfires. This is the main reason it sits behind `runtime_guards` |
+| F11 | `G53` needs the reference position established after power-on | Every positioning move | Fanuc manual | Documented. True on any machine with absolute encoders, or after homing |

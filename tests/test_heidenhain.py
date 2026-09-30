@@ -239,12 +239,8 @@ def test_comments_are_sanitised_for_klartext(catalog: Catalog) -> None:
     assert "; WARM-UP FOR MACHINE M1 - CAFE, FAST - MILL" in program.text
 
 
-def test_registry_renders_heidenhain(catalog: Catalog) -> None:
-    plan = plan_with(catalog)
+@pytest.mark.parametrize("controller", list(Controller))
+def test_registry_renders_every_controller(catalog: Catalog, controller: Controller) -> None:
+    program = posts.render(plan_with(catalog), controller)
 
-    assert posts.render(plan, Controller.HEIDENHAIN) == heidenhain.render(plan)
-
-
-def test_registry_rejects_a_controller_without_a_post(catalog: Catalog) -> None:
-    with pytest.raises(NotImplementedError, match="no post-processor for fanuc"):
-        posts.render(plan_with(catalog), Controller.FANUC)
+    assert program.controller is controller

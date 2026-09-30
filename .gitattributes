@@ -1,5 +1,6 @@
-# Heidenhain Klartext programs use CRLF on the control. Store them byte-for-byte
-# (no end-of-line conversion) so the committed spike programs, and later the
-# golden test files, are exactly what gets loaded onto a TNC. `diff` keeps them
-# reviewable as text.
+# Store NC programs byte-for-byte (no end-of-line conversion), so the committed
+# spike programs and golden examples are exactly what gets loaded onto a control,
+# on every OS. Heidenhain .H files are CRLF; Fanuc .nc files are LF. `diff` keeps
+# them reviewable as text.
 *.H -text diff
+*.nc -text diff
