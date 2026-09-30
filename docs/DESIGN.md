@@ -120,6 +120,36 @@ fails:
 It runs on the examples and on 100 random plans, and is itself mutation-tested with 14
 kinds of broken program.
 
+## Round-trip verification
+
+`cnc_warmup.verify.verify(plan, program)` reads a generated program back and checks it
+against the plan:
+1. It uses a small interpreter for that program's dialect.
+2. It runs the program on a simulated machine that tracks position, spindle and coolant, with
+   soft limits set to the machine's configured travel.
+3. It compares every move and dwell with `plan.trace()`. An empty result means the program
+   does exactly what the plan says.
+
+All 12 shipped programs, and both posts' output for 100 random plans per test run, pass.
+
+| Decision | Why |
+|---|---|
+| Programs are **executed**, not just pattern-matched | Only running a program catches a wrong repeat count, a subprogram that doesn't return, a feed read from the wrong parameter, or a modal slip. The format linters in the tests still check layout rules |
+| The readers copy the control's semantics, including its traps | Heidenhain: `REP` counts extra runs, subprograms return at `LBL 0`, and `FN 18` reads the soft limits. Fanuc: `G53` is one-shot, always rapid and **ignored in `G91`**, and `G00`/`G01`/`G90`/`G91` are modal. So a `G53` missing its `G90` shows up as a wrong position, just as it would on the machine |
+| A strict subset: anything else is a `ReaderError` | The verifier only vouches for what it fully understands. A Fanuc move in work coordinates (`G90` without `G53`) is rejected as unverifiable |
+| Moves that go nowhere are ignored in the comparison | Fanuc's per-stage re-anchoring and a retract when Z is already up change nothing on the machine |
+| Tolerances: position 1e-6 mm, feed 0.001 mm/min, spindle 0.5 rpm, dwell 0.001 s | These match the resolution the posts write. Fanuc `S` words are whole rpm |
+| The travel checks are **executed** against simulated soft limits | For every axis, side and controller, a soft limit 0.5 mm inside the sweep must stop the program before its first move. Limits exactly equal to the sweep must let it run |
+
+**The safety argument in one line:** property tests prove the plan's invariants on
+`trace()` (inside the travel, full travel swept, ramps rising, safe start and end, coolant
+only when configured). Round-trip tests prove the programs reproduce `trace()` exactly. So
+the programs have the invariants too.
+
+**What it does not prove:** that the real control accepts the syntax (that's the
+programming-station spike), or behavior that depends on the machine (the frame of the
+`FN 18` values, the units of `PRM`). Those are tracked in the verification log below.
+
 ## Controller syntax verification
 
 This section records which controller constructs the generated programs depend on, and
