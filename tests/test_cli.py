@@ -193,3 +193,46 @@ def test_bad_override_syntax_is_a_usage_error(capsys: pytest.CaptureFixture[str]
 
     assert exit_info.value.code == 2
     assert "argument --set: expected KEY=VALUE, got 'feed_end'" in capsys.readouterr().err
+
+
+def test_ui_command_serves_the_configurator(
+    project: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cnc_warmup.ui import app
+
+    calls: list[tuple[object, dict[str, object]]] = []
+    monkeypatch.setattr(app, "run", lambda settings, **options: calls.append((settings, options)))
+
+    status, _, err = run(capsys, "ui", "--no-browser", "--port", "9000", "-o", "programs")
+
+    assert (status, err) == (0, "")
+    assert calls == [
+        (
+            app.Settings(Path("config"), Path("programs")),
+            {"host": "127.0.0.1", "port": 9000, "show": False},
+        )
+    ]
+
+
+def test_ui_command_warns_when_reachable_from_other_computers(
+    project: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cnc_warmup.ui import app
+
+    monkeypatch.setattr(app, "run", lambda settings, **options: None)
+
+    status, _, err = run(capsys, "ui", "--host", "0.0.0.0", "--no-browser")
+
+    assert status == 0
+    assert err.startswith("warning: listening on 0.0.0.0: anyone who can reach this address")
+
+
+def test_ui_command_explains_how_to_install_the_ui(
+    project: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "cnc_warmup.ui.app", None)  # makes the import fail
+
+    status, _, err = run(capsys, "ui")
+
+    assert status == 1
+    assert "`uv sync --extra ui` or `pip install 'cnc-warmup[ui]'`" in err

@@ -14,9 +14,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cnc_warmup.config import Catalog, ConfigError, apply_overrides
+from cnc_warmup.config import (
+    Catalog,
+    ConfigError,
+    apply_overrides,
+    parse_machines,
+    parse_profiles,
+)
 from cnc_warmup.issues import Issue, Severity
-from cnc_warmup.model import Controller
+from cnc_warmup.model import Controller, Machine, WarmupProfile
 from cnc_warmup.plan import WarmupPlan, build_plan
 from cnc_warmup.posts import render
 from cnc_warmup.posts.base import Program
@@ -66,6 +72,35 @@ def preview(catalog: Catalog, request: GenerationRequest) -> Preview:
         for problem in verify(plan, program)
     )
     return Preview(request, plan, programs, (*plan.warnings, *mismatches))
+
+
+def preview_config(
+    machine_id: str,
+    machine: Mapping[str, object],
+    profile_name: str,
+    profile: Mapping[str, object],
+    controllers: tuple[Controller, ...] = (),
+) -> Preview:
+    """Preview unsaved machine and profile tables, e.g. from the UI's forms.
+
+    The tables are validated exactly like machines.toml and profiles.toml, then
+    planned, rendered and verified like any saved configuration.
+    """
+    request = GenerationRequest(machine_id, profile_name, controllers=controllers)
+    issues: list[Issue] = []
+    machines: dict[str, Machine] = {}
+    profiles: dict[str, WarmupProfile] = {}
+    try:
+        machines = parse_machines({"machines": {machine_id: dict(machine)}}, source=None)
+    except ConfigError as error:
+        issues += error.issues
+    try:
+        profiles = parse_profiles({"profiles": {profile_name: dict(profile)}}, source=None)
+    except ConfigError as error:
+        issues += error.issues
+    if issues:
+        return Preview(request, None, (), tuple(issues))
+    return preview(Catalog(machines, profiles), request)
 
 
 def write_programs(result: Preview, out_dir: Path) -> list[Path]:

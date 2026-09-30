@@ -196,3 +196,20 @@ def test_quoted_literals_are_valid_toml(value: object) -> None:
 def test_unsupported_override_values_are_rejected() -> None:
     with pytest.raises(TypeError, match="cannot write"):
         toml_literal({"not": "a scalar"})
+
+
+def test_preview_config_reports_problems_in_both_tables() -> None:
+    result = service.preview_config("M1", {"max_feed": -1}, "daily", {"stages": 1})
+
+    assert result.plan is None
+    assert [issue.path for issue in result.errors] == [
+        "machines.M1",  # neither travel nor limits
+        "machines.M1.spindle_max_rpm",
+        "machines.M1.max_feed",
+        "profiles.daily.feed_start",
+        "profiles.daily.feed_end",
+        "profiles.daily.rpm_start",
+        "profiles.daily.rpm_end",
+        "profiles.daily.duration_min",
+        "profiles.daily.stages",
+    ]

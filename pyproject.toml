@@ -9,6 +9,12 @@ dependencies = []
 [project.scripts]
 cnc-warmup = "cnc_warmup.cli:main"
 
+[project.optional-dependencies]
+ui = [
+    "nicegui>=3.17.1",
+    "tomlkit>=0.15.1",
+]
+
 [build-system]
 requires = ["uv_build>=0.10.4,<0.11.0"]
 build-backend = "uv_build"
@@ -17,9 +23,12 @@ build-backend = "uv_build"
 dev = [
     "hypothesis>=6.168.3",
     "mypy>=2.3.1",
+    "nicegui>=3.17.1",
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.9",
+    "tomlkit>=0.15.1",
 ]
 
 [tool.ruff]
@@ -50,8 +59,16 @@ files = ["src", "tests"]
 minversion = "9.0"
 testpaths = ["tests"]
 pythonpath = ["tests"]  # shared test helpers, e.g. `import strategies`
-addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+    "-p", "nicegui.testing.user_plugin",  # simulated browser user for the UI tests
+]
 xfail_strict = true
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["cnc_warmup"]

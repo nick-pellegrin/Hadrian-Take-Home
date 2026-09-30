@@ -5,6 +5,7 @@ Commands:
 - ``show-plan``: one warm-up's stage table and warnings, without writing anything.
 - ``generate``: write programs, each verified by reading it back first.
 - ``validate``: check that every machine/profile pair plans, renders and verifies.
+- ``ui``: the browser configurator (optional 'ui' extra: NiceGUI, tomlkit).
 
 Exit status: 0 on success, 1 for configuration or verification errors, 2 for
 usage errors. Errors and warnings go to stderr.
@@ -42,6 +43,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "show-plan": _show_plan,
         "generate": _generate,
         "validate": _validate,
+        "ui": _ui,
     }
     return handlers[args.command](catalog, args)
 
@@ -124,6 +126,29 @@ def build_parser() -> argparse.ArgumentParser:
         "validate",
         parents=[config],
         help="check every machine/profile pair plans, renders and verifies (for CI)",
+    )
+
+    serve = commands.add_parser(
+        "ui",
+        parents=[config],
+        help="open the configurator in a browser (needs the 'ui' extra)",
+    )
+    serve.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=Path("out"),
+        metavar="DIR",
+        help="output folder for 'Generate files' (default: out)",
+    )
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="address to listen on (default: 127.0.0.1, this computer only)",
+    )
+    serve.add_argument("--port", type=int, default=8080, help="default: 8080")
+    serve.add_argument(
+        "--no-browser", action="store_true", help="don't open a browser tab automatically"
     )
     return parser
 
@@ -251,6 +276,27 @@ def _validate(catalog: Catalog, args: argparse.Namespace) -> int:
         f"All {programs} programs plan, render and verify."
     )
     _warn([issue for result in results for issue in result.warnings])
+    return OK
+
+
+def _ui(catalog: Catalog, args: argparse.Namespace) -> int:
+    """Serve the configurator. The UI packages are imported only here, never by the core."""
+    try:
+        from cnc_warmup.ui.app import Settings, run
+    except ImportError as error:
+        print(
+            f"error: the UI needs its optional dependencies ({error.name}). Install them with "
+            "`uv sync --extra ui` or `pip install 'cnc-warmup[ui]'`.",
+            file=sys.stderr,
+        )
+        return FAILED
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        print(
+            f"warning: listening on {args.host}: anyone who can reach this address can edit "
+            "the configuration (there is no login).",
+            file=sys.stderr,
+        )
+    run(Settings(args.config, args.out), host=args.host, port=args.port, show=not args.no_browser)
     return OK
 
 

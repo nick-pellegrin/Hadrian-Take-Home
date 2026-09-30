@@ -1,6 +1,14 @@
 # UI specification: warm-up configurator
 
-**Status:** draft, for review. Nothing in this document has been built yet.
+**Status:** implemented in `src/cnc_warmup/ui/`. Launch it with `uv run cnc-warmup ui`.
+The build differs from this draft in two ways:
+- **Machines are fully editable** (moved up from §11). You can edit travel or explicit
+  limits, spindle and feed caps, and the Fanuc program number and cancel codes. You can
+  also duplicate, save and delete machines, not just profiles.
+- **The §12 questions are decided:** NiceGUI; part of the submission; Save writes into
+  `machines.toml` / `profiles.toml`, keeping their comments.
+
+§13 records how the implementation meets the acceptance criteria.
 
 A small local web UI for setting a warm-up program's parameters, checking the result as
 you go, and writing the programs. It sits on top of the same core as the `cnc-warmup` CLI.
@@ -266,17 +274,40 @@ def cli_command(request: GenerationRequest) -> str: ...
 - **3D toolpath preview** (`ui.scene`): the travel envelope as a box, the sweep path,
   and the start and park points. Useful for spotting a bad coordinate convention at a
   glance.
-- **Machine editor**, with the same validation and TOML persistence.
+- ~~**Machine editor**, with the same validation and TOML persistence.~~ Built in v1.
 - **Diff view:** generated program vs the committed `examples/` file.
 - **Send to control** over LSV2 (`pyLSV2`) or FOCAS. Deliberately out of scope for a
   take-home.
 
-## 12. Open questions
+## 12. Decisions (formerly open questions)
 
-1. Is NiceGUI acceptable, or would you prefer a zero-dependency option (Tkinter) or a
-   terminal UI (Textual)?
-2. Should the UI be part of the submission or a stretch goal? Adding it to the roadmap
-   costs about 4–6 h after the core is done.
-3. Should Save profile write into `profiles.toml` (proposed), or to a separate
-   `profiles.local.toml` that overrides it?
-4. Should a read-only machine panel be enough for v1, or is machine editing needed?
+1. **NiceGUI**, as the optional `ui` extra.
+2. The UI is **part of the submission**.
+3. Save writes **into `machines.toml` / `profiles.toml`**, with tomlkit keeping every comment.
+4. **Machine editing is included** (full configurability).
+
+## 13. Implementation notes
+
+| Module | Role |
+|---|---|
+| `ui/form.py` | Flat form fields ↔ TOML tables (`MachineForm`, `ProfileForm`), travel ↔ limits conversion, and `field_for(issue)`. No NiceGUI, so it's unit-tested on its own |
+| `ui/persist.py` | Reads the files with tomlkit and updates entries **key by key in place**, so inline comments and inline-table style survive. Files are read and written as bytes to keep CRLF/LF. New entries follow the file's layout (inline `travel`/`limits`, a `[machines.X.fanuc]` section) |
+| `ui/app.py` | The page (`Editor`, one per browser tab). Every change calls `service.preview_config`, the same validation, planning, rendering and **round-trip verification** as the CLI |
+
+| Acceptance criterion (§10) | How it's met / tested (`tests/test_ui*.py`) |
+|---|---|
+| Opens with one command | `cnc-warmup ui` (CLI test). Checked against a live server: HTTP 200 with the program in the page |
+| Every field present, with units and tooltips | All `machines.toml` and `profiles.toml` keys have a widget. Numbers carry units as suffixes |
+| Live preview | Recomputed on every change (about 10 ms), with no debounce needed |
+| Errors under the field, blocking Generate/Download/Save; warnings don't block | `_show_field_errors` maps each `Issue.path` to its field. NiceGUI's own auto-validation is disabled so it can't clear core errors. Tested with an out-of-range feed, an empty field, a bad machine ID, and a warning |
+| Byte-identical to the CLI | Generate and Download are compared with `examples/` in tests |
+| Saving keeps comments; the CLI reproduces the output | The persist tests check the exact changed lines. The shown CLI command expresses profile edits as `--set` overrides |
+| Localhost only unless `--host` | The default host is `127.0.0.1`. Any other host prints a warning (CLI test) |
+| The core runs without the extra | `tests/test_dependencies.py` generates in a subprocess and asserts no UI package was imported |
+
+Some interaction details:
+- Switching entries is **instant** when there are no unsaved changes. Otherwise a
+  confirmation dialog appears first.
+- Replacing another saved entry and deleting an entry also ask for confirmation.
+- At least one output controller always stays selected.
+- Actions ignore a click that raced a button being disabled; a test covers this.
