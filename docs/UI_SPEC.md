@@ -1,12 +1,14 @@
 # UI specification: warm-up configurator
 
 **Status:** implemented in `src/cnc_warmup/ui/`. Launch it with `uv run cnc-warmup ui`.
-The build differs from this draft in two ways:
+The build differs from the first draft in three ways:
 - **Machines are fully editable** (moved up from §11). You can edit travel or explicit
   limits, spindle and feed caps, and the Fanuc program number and cancel codes. You can
-  also duplicate, save and delete machines, not just profiles.
+  also duplicate, rename, save and delete machines, not just profiles.
 - **The §12 questions are decided:** NiceGUI; part of the submission; Save writes into
   `machines.toml` / `profiles.toml`, keeping their comments.
+- **The layout was simplified** after a first build showed every setting at once. §4,
+  §5 and §7 describe the page as built.
 
 §13 records how the implementation meets the acceptance criteria.
 
@@ -32,7 +34,7 @@ This is **not** an operator HMI. It never talks to a machine.
    reproduce the output exactly.
 
 **Non-goals for v1:**
-- Editing machine definitions (read-only in v1; see §11).
+- ~~Editing machine definitions~~ (built after all; see the status note).
 - Sending programs to a control (DNC, LSV2, FOCAS).
 - Authentication, multiple users, or network hosting by default.
 - Mobile layout.
@@ -80,75 +82,95 @@ Why NiceGUI:
 
 ## 4. Layout
 
-One page, two columns, sticky action bar.
+One page: three numbered steps on the left, the live preview on the right.
+
+- **Common settings first.** Each card shows only what most warm-ups change. Everything
+  else sits in a collapsed **Advanced** section, one click away.
+- **Unsaved work is hard to miss.** A footer with **Save changes** and **Discard** appears
+  only while something is unsaved. It covers both cards, and each card's title shows an
+  orange badge when that card has unsaved changes.
+- **Rarely used actions are tucked away.** Renaming is the ✏ button next to the
+  saved-entry select. The ⋮ ("more") menu beside it has **Save** (just this card),
+  **Duplicate…** and **Delete…**.
+- **Hadrian's navy (`#002548`)** is the primary colour: header, footer, step numbers,
+  buttons and selected toggles.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────┐
-│ CNC Warm-Up Generator   Machine [M1 ▾]   Profile [daily ▾]   Output [☑ Heidenhain ☑ Fanuc] │
-├────────────────────────────────┬─────────────────────────────────────────────────────┤
-│ MACHINE  (read-only)           │  [ Summary ] [ Heidenhain .H ] [ Fanuc .nc ]        │
-│  X −762 … 0   Y −508 … 0       │ ┌─────────────────────────────────────────────────┐ │
-│  Z −500 … 0   (machine coords) │ │ Est. 15.4 min · 5 stages · Heidenhain 88 blocks │ │
-│  Spindle max 12 000 rpm        │ │                                                 │ │
-│  Feed max 20 000 mm/min        │ │ Stage   RPM    Feed   Passes  Dwell   Time      │ │
-│  Edit config/machines.toml ↗   │ │   1     1000   2000     1      0 s    3:08      │ │
-│                                │ │   2     3250   4500     1     37 s    3:00      │ │
-│ AXIS WARM-UP                   │ │   …                                             │ │
-│  Start feed   [  2000 ] mm/min │ │                                                 │ │
-│  Finish feed  [ 12000 ] mm/min │ │ ⚠ Stage 1 runs 3:08, over its 3:00 budget       │ │
-│                                │ │   (raise the start feed or the duration)        │ │
-│ SPINDLE WARM-UP                │ └─────────────────────────────────────────────────┘ │
-│  Start RPM    [  1000 ]        │                                                     │
-│  Finish RPM   [ 10000 ]        │  Code tabs: read-only, monospace, line numbers,     │
-│                                │  copy button; shows the exact bytes that will be    │
-│ TIMING                         │  written                                            │
-│  Duration  [ 15 ] min          │                                                     │
-│  Stages    [  5 ]              │                                                     │
-│  Ramp      (•) linear  ( ) geometric                                                 │
-│                                │                                                     │
-│ SWEEP PATTERN                  │                                                     │
-│  ☑ Perimeter  ☑ XY diagonals  ☑ Z stroke   Z stroke at (•) centre ( ) start corner   │
-│  Edge margin  [ 1.0 ] mm       │                                                     │
-│                                │                                                     │
-│ OPTIONS                        │                                                     │
-│  Coolant  [ off ▾ ]            │                                                     │
-│  ☑ Operator confirmation stop  │                                                     │
-│  ☑ Runtime soft-limit guard    │                                                     │
-│  ☐ Final rapid pass            │                                                     │
-├────────────────────────────────┴─────────────────────────────────────────────────────┤
-│ ● Unsaved changes   [Reset]   [Save profile ▾]   [Generate files]   [Download ▾]   [⧉ CLI command] │
-└──────────────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────────────┐
+│ CNC Warm-Up Generator                                                                     │
+├────────────────────────────────────────────┬──────────────────────────────────────────────┤
+│ (1) Machine M1  [unsaved changes]          │ 1 program(s) generated and verified          │
+│   Saved machines [M1      v] [edit] [more] │ [Summary] [Heidenhain TNC 640] [Fanuc 31i]   │
+│   Description [3-axis VMC, 762 x 508…]     │                                              │
+│   X travel [762]  Y [508]  Z [500] mm      │ Sweep envelope X -761..-1 Y … Z …            │
+│   Spindle max [12000] rpm                  │ One sweep pass: 6267 mm                      │
+│   Max feed    [20000] mm/min               │ Estimated run time 19:57                     │
+│   > Advanced: where machine zero is,       │                                              │
+│     Fanuc settings                         │ Stage  RPM   Feed  Passes  Dwell  Time       │
+│                                            │   1   1000   2500     1    89 s   3:59       │
+│ (2) Warm-up profile daily                  │   2   3250   4880     3     8 s   3:59       │
+│   Saved profiles [daily   v] [edit] [more] │   …                                          │
+│   Description [Daily warm-up before…]      │                                              │
+│   Feed at start    [2500] finish [12000]   │ Errors and warnings are listed here.         │
+│   Spindle at start [1000] finish [10000]   │ Program tabs: the exact text written,        │
+│   Duration [20] min  [Coolant off|Flood]   │ with its file name and Download.             │
+│   > Advanced: stages, edge margin, ramp,   │                                              │
+│     moves per pass, Z stroke, safety       │                                              │
+│                                            │                                              │
+│ (3) Generate                               │                                              │
+│   [x] Heidenhain TNC 640  [ ] Fanuc 31i    │                                              │
+│   [> Generate files] to out/<controller>/  │                                              │
+│   > Command-line equivalent                │                                              │
+├────────────────────────────────────────────┴──────────────────────────────────────────────┤
+│                                Unsaved changes to machine M1   [Discard]   [Save changes] │
+│                                                   (only shown while something is unsaved) │
+└───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 5. Fields
 
-Defaults come from the selected profile. **Ranges marked † are proposals to confirm.**
-Every limit that depends on the machine is enforced by the **core** validator. The UI
-only mirrors those limits in the widgets' min/max so bad values are hard to type.
+Every limit that depends on the machine is enforced by the **core** validator, which
+reports each problem under the field it belongs to. "› Advanced" fields are in the
+card's collapsed Advanced section.
 
-| Section | Label | Config key | Control | Unit | Validation (core) | Help text (tooltip) |
+**Step 1, Machine** (`machines.toml`):
+
+| Where | Label | Config key | Control | Unit | Validation (core) |
+|---|---|---|---|---|---|
+| Machine | Saved machines | machine ID | select, ✏ rename | — | 1-16 letters, digits, `_` or `-`, starting with a letter or digit; unique |
+| Machine | Description | `description` | text | — | optional |
+| Machine | X / Y / Z travel | `travel` | numbers | mm | > 0, keeping at least 1 mm inside the edge margins |
+| Machine | Spindle max | `spindle_max_rpm` | number | rpm | > 0 |
+| Machine | Max feed | `max_feed` | number | mm/min | > 0 |
+| › Advanced | Where is machine zero? | `home`, or `limits` | radio: **+ end** of each axis (most VMCs), **− end**, or **somewhere else** (enter each axis's min and max) | mm | each axis has min < max |
+| › Advanced | This machine can run Fanuc 31i programs | `[fanuc]` table | switch | — | needed for Fanuc output |
+| › Advanced | Program number, Cancel codes | `fanuc.program_number`, `fanuc.cancel_codes` | number (`O` prefix), chips | — | 1-8999 (O9000 and up are the builder's macros); only codes the control has options for |
+
+**Step 2, Warm-up profile** (`profiles.toml`):
+
+| Where | Label | Config key | Control | Unit | Validation (core) | Tooltip |
 |---|---|---|---|---|---|---|
-| Header | Machine | `--machine` | select | — | must exist in `machines.toml` | — |
-| Header | Profile | `--profile` | select | — | must exist in `profiles.toml` | "Starting values; edits are unsaved until you save." |
-| Header | Output | `--controller` | 2 toggles | — | at least one on | "Heidenhain TNC 640 Klartext (.H) and/or Fanuc 31i (.nc)" |
-| Axis | Start feed | `feed_start` | number, step 10 | mm/min | `0 < feed_start ≤ feed_end` | "Feed of the first, gentlest sweep." |
-| Axis | Finish feed | `feed_end` | number, step 10 | mm/min | `≤ machine.max_feed` | — |
-| Spindle | Start RPM | `rpm_start` | number, step 10 | rpm | `0 < rpm_start ≤ rpm_end` | "Never start a cold spindle at high speed." |
-| Spindle | Finish RPM | `rpm_end` | number, step 10 | rpm | `≤ machine.spindle_max_rpm` | — |
-| Timing | Duration | `duration_min` | number | min | 1–240 † | "Target; each stage holds its RPM for at least duration ÷ stages." |
-| Timing | Stages | `stages` | number | — | 2–20 † | — |
-| Timing | Ramp | `ramp` | radio | — | `linear` \| `geometric` | "Geometric spends more time at low speed, which is gentler on bearings." |
-| Pattern | Perimeter / XY diagonals / Z stroke | `pattern` | checkboxes | — | together they must reach **all six** axis extremes | — |
-| Pattern | Z stroke at | `z_stroke_at` | radio | — | `center` \| `start` | — |
-| Pattern | Edge margin | `edge_margin_mm` | number, step 0.1 | mm | `0 ≤ m`, and `2m <` smallest travel; 0–25 † | "Stops this far inside each limit so servo overshoot can't trip an overtravel alarm." |
-| Options | Coolant | `coolant` | select | — | `off` \| `flood` | "Flood with an empty spindle sprays the enclosure." |
-| Options | Operator confirmation stop | `operator_confirm` | switch | — | — | "STOP / #3006 checklist prompt before the spindle starts." |
-| Options | Runtime soft-limit guard | `runtime_guards` | switch | — | — | "Program reads the control's soft limits and alarms if they don't match this machine." |
-| Options | Final rapid pass | `final_rapid_pass` | switch | — | — | — |
+| Profile | Saved profiles | profile name | select, ✏ rename | — | 1-32 lowercase letters, digits or `_`, starting with a letter; unique | — |
+| Profile | Description | `description` | text | — | optional | — |
+| Profile | Feed at start / finish | `feed_start`, `feed_end` | numbers | mm/min | `0 < start ≤ finish ≤ machine.max_feed` | — |
+| Profile | Spindle at start / finish | `rpm_start`, `rpm_end` | numbers | rpm | `0 < start ≤ finish ≤ machine.spindle_max_rpm` | "Never start a cold spindle at high speed." |
+| Profile | Duration | `duration_min` | number | min | > 0, at most 240 | — |
+| Profile | Coolant off / Flood coolant | `coolant` | toggle | — | `off` \| `flood` | — |
+| › Advanced | Stages | `stages` | number | — | 2-20 | "Each holds its speed for duration / stages." |
+| › Advanced | Edge margin | `edge_margin_mm` | number | mm | 0 to 25 mm, keeping at least 1 mm of travel | "Stops this far inside every limit, so servo overshoot can't trip an overtravel alarm." |
+| › Advanced | How speeds step up: Equal steps / Smaller steps at low speed | `ramp` | toggle | — | `linear` \| `geometric` | — |
+| › Advanced | Moves in each pass | `pattern` | chips | — | together they must reach **all six** axis extremes | — |
+| › Advanced | Z stroke at the XY center / at the start corner | `z_stroke_at` | toggle | — | `center` \| `start` | — |
+| › Advanced | Checklist stop before the spindle starts | `operator_confirm` | switch | — | — | — |
+| › Advanced | Check the control's soft limits match this machine | `runtime_guards` | switch | — | — | — |
+| › Advanced | Finish with one pass at rapid traverse | `final_rapid_pass` | switch | — | — | — |
 
-The machine panel shows read-only data from `machines.toml`: limits, spindle max, max
-feed, Fanuc program number, and Fanuc cancel codes. It links to the file rather than
-editing it.
+A machine's `controller` key (the CLI's default output) has no field. The UI always
+starts with Heidenhain checked under Generate, and saving keeps whatever the file says.
+
+**Step 3, Generate:** a checkbox per controller (Heidenhain checked at start, at least
+one always checked), **Generate files**, and a collapsed **Command-line equivalent**
+with a copy button.
 
 ## 6. Architecture
 
@@ -217,19 +239,28 @@ def cli_command(request: GenerationRequest) -> str: ...
      and **Save**.
    - Warnings (e.g. "stage 1 over budget", "Heidenhain output is 104 blocks, over the
      100-block demo limit") are shown but do not block anything.
-4. **Unsaved changes:** a dot plus "Unsaved changes" shows when the form differs from the
-   selected profile. **Reset** reverts to the profile. Switching machine or profile
-   while there are unsaved changes asks for confirmation.
+4. **Unsaved changes:**
+   - A card's title gets an orange badge ("unsaved changes", "renamed from M1, not saved
+     yet" or "new, not saved yet") when it differs from the file.
+   - The footer appears, naming what's unsaved. **Discard** (after a confirmation)
+     reloads both cards from the files.
+   - Switching to another saved entry while there are unsaved changes asks first.
 5. **Generate files:**
    - Writes the selected controllers' programs to the output directory (default `out/`).
    - Asks before overwriting, then lists the written paths.
    - Uses the same file names as the CLI (`WARMUP_M1.H`, `O8001.nc`).
 6. **Download:** a browser download of one program. It contains the same bytes as
    Generate, including CRLF for `.H` files.
-7. **Save profile:**
-   - "Save to current profile" or "Save as new profile…" (name matches `^[a-z][a-z0-9_]{0,31}$`).
-   - Only allowed when there are no errors. Asks before overwriting.
-   - Writes to `config/profiles.toml` and keeps its comments.
+7. **Save changes:**
+   - Saves whatever changed: the machine, the profile, or both, each into its own file
+     with its comments kept.
+   - Disabled while a changed entry has errors, and saves nothing if either is invalid.
+     A machine or profile is checked on its own, so a valid machine can be saved even
+     when the profile doesn't fit it yet.
+   - Each card's ⋮ menu has **Save**, which saves just that card. It is enabled only
+     while the card has valid unsaved changes.
+   - Names come from the rename and duplicate dialogs, which reject names already in
+     use, so a save never overwrites another entry.
 8. **CLI command:** copies the equivalent command to the clipboard, e.g.
    `uv run cnc-warmup generate --machine M1 --profile daily --set feed_end=12000 --controller heidenhain fanuc`.
 
@@ -306,8 +337,22 @@ def cli_command(request: GenerationRequest) -> str: ...
 | The core runs without the extra | `tests/test_dependencies.py` generates in a subprocess and asserts no UI package was imported |
 
 Some interaction details:
+- **Names** (machine ID, profile name) aren't form fields. Each card's title shows the
+  current name, and the **✏ rename** button next to the saved-entry select opens a
+  dialog. The dialog checks the name as you type against the config's naming rule and
+  the existing names, and Enter confirms it.
+- A rename is an unsaved change ("renamed from M1, not saved yet"). **Save changes**
+  renames the entry in the file: only its `[section.name]` header lines change, so it
+  keeps its place and comments.
+- **Duplicate…** (⋮ menu) asks for the copy's name, with a free one suggested. The copy
+  is marked "new, not saved yet", and Save changes adds it next to the original.
+- **Where is machine zero?** replaces a travel-or-limits toggle and a home toggle with
+  one question an engineer can answer at the machine. Choosing "somewhere else" converts
+  the travel to explicit min/max fields, and choosing an end converts back, keeping the
+  lengths. `MachineForm.set_zero` does the conversion and is unit-tested.
 - Switching entries is **instant** when there are no unsaved changes. Otherwise a
   confirmation dialog appears first.
-- Replacing another saved entry and deleting an entry also ask for confirmation.
+- Deleting an entry and discarding changes ask for confirmation. Delete is disabled for
+  an unsaved copy and for the last entry in a file.
 - At least one output controller always stays selected.
 - Actions ignore a click that raced a button being disabled; a test covers this.

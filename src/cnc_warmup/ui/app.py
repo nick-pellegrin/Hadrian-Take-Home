@@ -4,6 +4,12 @@ Everything the page shows comes from `service.preview_config`: the same
 validation, planning, rendering and round-trip verification the CLI uses. The UI
 holds no generation logic of its own. Edits stay in the page until saved, and
 saving writes machines.toml / profiles.toml with their comments intact.
+
+The page follows three steps (1 Machine, 2 Warm-up profile, 3 Generate). Each card
+shows only the common settings; everything else sits in a collapsed "Advanced"
+section. One Save changes / Discard pair in the footer covers both cards, and
+appears only when something is unsaved. Each card's ⋮ menu can also save just that
+card.
 """
 
 from collections.abc import Callable, Coroutine, Iterator, Mapping
@@ -20,8 +26,10 @@ from cnc_warmup.config import (
     MACHINES_FILE,
     PROFILES_FILE,
     ConfigError,
+    machine_id_problem,
     parse_machines,
     parse_profiles,
+    profile_name_problem,
     profile_to_raw,
 )
 from cnc_warmup.issues import Issue, Severity
@@ -39,7 +47,13 @@ from cnc_warmup.ui import persist
 from cnc_warmup.ui.form import LIMITS, MACHINE, PROFILE, TRAVEL, MachineForm, ProfileForm, field_for
 
 TITLE = "CNC Warm-Up Generator"
+PRIMARY_COLOR = "#002548"  # Hadrian's navy
 CONTROLLER_NAMES = {Controller.HEIDENHAIN: "Heidenhain TNC 640", Controller.FANUC: "Fanuc 31i"}
+ZERO_OPTIONS = {
+    "max": "At the + end of each axis (most VMCs): coordinates run from -travel to 0",
+    "min": "At the - end of each axis: coordinates run from 0 to +travel",
+    LIMITS: "Somewhere else: enter each axis's min and max",
+}
 
 
 @dataclass(frozen=True)
@@ -58,14 +72,17 @@ class _Kind:
     """What differs between editing machines and editing profiles."""
 
     key: str  # MACHINE or PROFILE: which form an issue belongs to
-    noun: str
+    noun: str  # in messages: "machine", "profile"
+    title: str  # on the card: "Machine", "Warm-up profile"
     section: str  # the TOML table the entries live under
     path: Path
     form: MachineForm | ProfileForm
     id_field: str  # the form field holding the entry's ID
     parse: Callable[..., Mapping[str, object]]
+    name_problem: Callable[[str], str | None]  # the config's naming rule
     saved: dict[str, dict[str, Any]] = field(default_factory=dict)
-    loaded: str = ""  # the saved entry the form was loaded from
+    loaded: str = ""  # the saved entry the form was loaded from (or copied from, if new)
+    new: bool = False  # a duplicate that isn't in the file yet
 
     @property
     def entry_id(self) -> str:
@@ -78,10 +95,22 @@ class _Kind:
     def dirty(self) -> bool:
         saved = self.saved_form()
         return (
-            saved is None
+            self.new
+            or saved is None
             or self.entry_id != self.loaded
             or self.form.to_table() != saved.to_table()
         )
+
+    def name_error(self, name: str, *, allowed: str = "") -> str | None:
+        """Why ``name`` can't be used for this entry: the naming rule, or already taken.
+
+        ``allowed`` is a saved name that is fine to reuse (the entry's own, when renaming).
+        """
+        if problem := self.name_problem(name):
+            return problem[0].upper() + problem[1:]
+        if name in self.saved and name != allowed:
+            return f"Another saved {self.noun} is already called {name}."
+        return None
 
     def problems(self) -> list[Issue]:
         """Issues in this entry on its own (a machine or profile can be saved without the other)."""
@@ -94,12 +123,13 @@ class _Kind:
 
 @dataclass(frozen=True)
 class _EntryBar:
-    """The select / save / delete controls above a machine or profile form."""
+    """A card's title, unsaved-changes badge, saved-entry select, and Save/Delete menu items."""
 
-    select: ui.select
+    title: ui.label
     badge: ui.badge
-    save: ui.button
-    delete: ui.button
+    select: ui.select
+    save: ui.menu_item
+    delete: ui.menu_item
 
 
 class Editor:
@@ -111,20 +141,24 @@ class Editor:
         self.machines = _Kind(
             MACHINE,
             "machine",
+            "Machine",
             "machines",
             settings.config_dir / MACHINES_FILE,
             self.machine,
             "machine_id",
             parse_machines,
+            machine_id_problem,
         )
         self.profiles = _Kind(
             PROFILE,
             "profile",
+            "Warm-up profile",
             "profiles",
             settings.config_dir / PROFILES_FILE,
             self.profile,
             "name",
             parse_profiles,
+            profile_name_problem,
         )
         self.inputs: dict[tuple[str, str], ValueElement[Any]] = {}
         self.outputs: dict[Controller, ui.checkbox] = {}
@@ -138,153 +172,161 @@ class Editor:
         self._load(self.machines, next(iter(self.machines.saved)))
         self._load(self.profiles, next(iter(self.profiles.saved)))
         with self._quiet():
-            self.outputs[Controller(self.machine.controller)].value = True
+            self.outputs[Controller.HEIDENHAIN].value = True  # Generate's checkboxes pick the rest
         self._refresh()
 
     # --- Layout ------------------------------------------------------------------------------
 
     def _build(self) -> None:
-        with ui.header().classes("items-center justify-between"):
+        ui.colors(primary=PRIMARY_COLOR)
+        with ui.header().classes("items-center"):
             ui.label(TITLE).classes("text-xl font-bold")
-            ui.label(
-                f"config: {self.settings.config_dir.as_posix()}  |  "
-                f"output: {self.settings.out_dir.as_posix()}"
-            ).classes("text-sm")
         with ui.row().classes("w-full no-wrap items-start gap-4"):
             with ui.column().classes("w-[460px] shrink-0 gap-4"):
                 self._machine_card()
                 self._profile_card()
-                self._output_card()
+                self._generate_card()
             with ui.column().classes("grow min-w-0"):
                 self._preview_panel()
+        with ui.footer().classes("items-center justify-end gap-4") as self.footer:
+            self.unsaved = ui.label().mark("unsaved-summary")
+            ui.button("Discard", on_click=self._discard).props("flat color=white").mark("discard")
+            self.save_button = (
+                ui.button("Save changes", icon="save", on_click=self._save_changes)
+                .props("color=white text-color=primary")
+                .mark("save")
+            )
 
-    def _entry_bar(self, kind: _Kind) -> None:
-        with ui.row().classes("w-full items-center"):
-            ui.label(kind.noun.capitalize()).classes("text-lg font-bold")
-            badge = ui.badge("unsaved changes", color="orange").mark(f"{kind.key}-unsaved")
+    def _card_header(self, kind: _Kind, step: int) -> None:
+        with ui.row().classes("w-full items-center no-wrap"):
+            ui.label(f"{step}").classes(
+                "rounded-full bg-primary text-white w-7 h-7 text-center leading-7 font-bold"
+            )
+            title = ui.label().classes("text-lg font-bold").mark(f"{kind.key}-title")
+            badge = ui.badge(color="orange").mark(f"{kind.key}-unsaved")
         with ui.row().classes("w-full items-center no-wrap"):
             select = (
                 ui.select(
                     [],
-                    label=f"Saved {kind.noun}",
+                    label=f"Saved {kind.noun}s",
                     on_change=lambda e: self._on_select(kind, e.value),
                 )
                 .classes("grow")
                 .mark(f"{kind.key}-select")
             )
-            ui.button(icon="content_copy", on_click=lambda: self._duplicate(kind)).props(
-                "flat round"
-            ).tooltip(f"Duplicate as a new {kind.noun}").mark(f"{kind.key}-duplicate")
-            save = ui.button("Save", icon="save", on_click=lambda: self._save(kind)).mark(
-                f"{kind.key}-save"
-            )
-            delete = (
-                ui.button(icon="delete", color="negative", on_click=lambda: self._delete(kind))
-                .props("flat round")
-                .tooltip(f"Delete this {kind.noun} from the file")
-                .mark(f"{kind.key}-delete")
-            )
-        self.bars[kind.key] = _EntryBar(select, badge, save, delete)
+            ui.button(icon="edit", on_click=lambda: self._rename(kind)).props("flat round").tooltip(
+                f"Rename this {kind.noun}"
+            ).mark(f"{kind.key}-rename")
+            more = ui.button(icon="more_vert").props("flat round").tooltip("More actions")
+            with more, ui.menu():
+                save = ui.menu_item("Save", on_click=lambda: self._save((kind,))).mark(
+                    f"{kind.key}-save"
+                )
+                ui.menu_item("Duplicate...", on_click=lambda: self._duplicate(kind)).mark(
+                    f"{kind.key}-duplicate"
+                )
+                delete = ui.menu_item("Delete...", on_click=lambda: self._delete(kind)).mark(
+                    f"{kind.key}-delete"
+                )
+        self.bars[kind.key] = _EntryBar(title, badge, select, save, delete)
 
     def _machine_card(self) -> None:
         with ui.card().classes("w-full"):
-            self._entry_bar(self.machines)
-            with ui.row().classes("w-full no-wrap"):
-                self._text(MACHINE, "machine_id", "Machine ID").classes("w-32").tooltip(
-                    "Letters, digits, _ or -. Becomes part of program and file names."
-                )
-                self._text(MACHINE, "description", "Description").classes("grow")
-            self._choice(MACHINE, "controller", {c.value: n for c, n in CONTROLLER_NAMES.items()})
-
-            ui.label("Travel, in machine coordinates (Heidenhain M91 / Fanuc G53)").classes(
-                "text-sm font-medium mt-2"
-            )
-            self._choice(
-                MACHINE, "coordinates", {TRAVEL: "Travel + home end", LIMITS: "Explicit limits"}
-            )
-            with ui.column().classes("w-full") as self.travel_box:
-                self._choice(
-                    MACHINE,
-                    "home",
-                    {"max": "Home at + end: -travel..0", "min": "Home at - end: 0..travel"},
-                )
-                with ui.row().classes("w-full no-wrap"):
-                    for axis in Axis:
-                        self._number(
-                            MACHINE, f"travel_{axis}", f"{axis.upper()} travel", suffix="mm"
-                        )
-            with ui.column().classes("w-full") as self.limits_box:
+            self._card_header(self.machines, 1)
+            self._text(MACHINE, "description", "Description").classes("w-full")
+            with ui.row().classes("w-full no-wrap") as self.travel_box:
+                for axis in Axis:
+                    self._number(MACHINE, f"travel_{axis}", f"{axis.upper()} travel", suffix="mm")
+            with ui.column().classes("w-full gap-0") as self.limits_box:
                 for axis in Axis:
                     with ui.row().classes("w-full no-wrap"):
                         self._number(MACHINE, f"{axis}_min", f"{axis.upper()} min", suffix="mm")
                         self._number(MACHINE, f"{axis}_max", f"{axis.upper()} max", suffix="mm")
-
             with ui.row().classes("w-full no-wrap"):
                 self._number(MACHINE, "spindle_max_rpm", "Spindle max", suffix="rpm").tooltip(
-                    "Caps the profile's finish RPM. Not written to programs."
+                    "The highest speed a warm-up may use on this machine."
                 )
                 self._number(MACHINE, "max_feed", "Max feed", suffix="mm/min").tooltip(
-                    "Caps the profile's finish feed. Not written to programs."
+                    "The highest feed a warm-up may use on this machine."
                 )
-            self._switch(MACHINE, "fanuc", "Fanuc 31i settings")
-            with ui.row().classes("w-full no-wrap") as self.fanuc_box:
-                self._number(MACHINE, "program_number", "Program number", prefix="O", precision=0)
-                self._select(
-                    MACHINE,
-                    "cancel_codes",
-                    [code.value for code in FanucCancelCode],
-                    "Cancel codes",
-                ).classes("grow").tooltip(
-                    "Only the codes this control has options for: others raise alarms."
+            with ui.expansion("Advanced", icon="tune").classes("w-full").mark("machine-advanced"):
+                ui.label("Where is machine zero? (Heidenhain M91 / Fanuc G53 coordinates)").classes(
+                    "text-sm font-medium"
                 )
+                self.zero = ui.radio(ZERO_OPTIONS, on_change=self._on_zero).mark("machine-zero")
+                self._switch(MACHINE, "fanuc", "This machine can run Fanuc 31i programs").classes(
+                    "mt-2"
+                )
+                with ui.row().classes("w-full no-wrap") as self.fanuc_box:
+                    self._number(
+                        MACHINE, "program_number", "Program number", prefix="O", precision=0
+                    )
+                    self._select(
+                        MACHINE,
+                        "cancel_codes",
+                        [code.value for code in FanucCancelCode],
+                        "Cancel codes",
+                    ).classes("grow").tooltip(
+                        "Only the codes this control has options for: others raise alarms."
+                    )
 
     def _profile_card(self) -> None:
         with ui.card().classes("w-full"):
-            self._entry_bar(self.profiles)
+            self._card_header(self.profiles, 2)
+            self._text(PROFILE, "description", "Description").classes("w-full")
             with ui.row().classes("w-full no-wrap"):
-                self._text(PROFILE, "name", "Profile name").classes("w-32")
-                self._text(PROFILE, "description", "Description").classes("grow")
+                self._number(PROFILE, "feed_start", "Feed at start", suffix="mm/min")
+                self._number(PROFILE, "feed_end", "Feed at finish", suffix="mm/min")
             with ui.row().classes("w-full no-wrap"):
-                self._number(PROFILE, "feed_start", "Start feed", suffix="mm/min")
-                self._number(PROFILE, "feed_end", "Finish feed", suffix="mm/min")
-            with ui.row().classes("w-full no-wrap"):
-                self._number(PROFILE, "rpm_start", "Start spindle", suffix="rpm").tooltip(
+                self._number(PROFILE, "rpm_start", "Spindle at start", suffix="rpm").tooltip(
                     "Never start a cold spindle at high speed."
                 )
-                self._number(PROFILE, "rpm_end", "Finish spindle", suffix="rpm")
-            with ui.row().classes("w-full no-wrap"):
-                self._number(PROFILE, "duration_min", "Duration", suffix="min").tooltip(
-                    "Each stage holds its speed for at least duration / stages."
+                self._number(PROFILE, "rpm_end", "Spindle at finish", suffix="rpm")
+            with ui.row().classes("w-full no-wrap items-center"):
+                self._number(PROFILE, "duration_min", "Duration", suffix="min")
+                self._choice(PROFILE, "coolant", {"off": "Coolant off", "flood": "Flood coolant"})
+            with ui.expansion("Advanced", icon="tune").classes("w-full").mark("profile-advanced"):
+                with ui.row().classes("w-full no-wrap"):
+                    self._number(PROFILE, "stages", "Stages", precision=0).tooltip(
+                        "Steps from start to finish. Each holds its speed for duration / stages."
+                    )
+                    self._number(PROFILE, "edge_margin_mm", "Edge margin", suffix="mm").tooltip(
+                        "Stops this far inside every limit, so servo overshoot can't trip an "
+                        "overtravel alarm."
+                    )
+                ui.label("How speeds step up from stage to stage").classes("text-sm font-medium")
+                self._choice(
+                    PROFILE,
+                    "ramp",
+                    {"linear": "Equal steps", "geometric": "Smaller steps at low speed"},
                 )
-                self._number(PROFILE, "stages", "Stages", precision=0)
-                self._number(PROFILE, "edge_margin_mm", "Edge margin", suffix="mm").tooltip(
-                    "Stops this far inside every limit, so servo overshoot can't trip an "
-                    "overtravel alarm."
+                self._select(
+                    PROFILE,
+                    "pattern",
+                    {"perimeter": "Perimeter", "diagonals": "XY diagonals", "z_stroke": "Z stroke"},
+                    "Moves in each pass",
+                ).classes("w-full")
+                self._choice(
+                    PROFILE,
+                    "z_stroke_at",
+                    {"center": "Z stroke at the XY center", "start": "at the start corner"},
                 )
-            self._choice(PROFILE, "ramp", {"linear": "Linear ramp", "geometric": "Geometric ramp"})
-            self._select(
-                PROFILE,
-                "pattern",
-                {"perimeter": "Perimeter", "diagonals": "XY diagonals", "z_stroke": "Z stroke"},
-                "Sweep pattern",
-            ).classes("w-full")
-            self._choice(
-                PROFILE,
-                "z_stroke_at",
-                {"center": "Z stroke at XY center", "start": "at start corner"},
-            )
-            self._choice(PROFILE, "coolant", {"off": "Coolant off", "flood": "Flood coolant"})
-            self._switch(
-                PROFILE, "operator_confirm", "Operator checklist stop before the spindle starts"
-            )
-            self._switch(
-                PROFILE, "runtime_guards", "Travel check against the control's soft limits"
-            )
-            self._switch(PROFILE, "final_rapid_pass", "Finish with a sweep at rapid traverse")
+                ui.label("Safety").classes("text-sm font-medium mt-2")
+                self._switch(
+                    PROFILE, "operator_confirm", "Checklist stop before the spindle starts"
+                )
+                self._switch(
+                    PROFILE, "runtime_guards", "Check the control's soft limits match this machine"
+                )
+                self._switch(PROFILE, "final_rapid_pass", "Finish with one pass at rapid traverse")
 
-    def _output_card(self) -> None:
+    def _generate_card(self) -> None:
         with ui.card().classes("w-full"):
-            ui.label("Output").classes("text-lg font-bold")
+            with ui.row().classes("w-full items-center no-wrap"):
+                ui.label("3").classes(
+                    "rounded-full bg-primary text-white w-7 h-7 text-center leading-7 font-bold"
+                )
+                ui.label("Generate").classes("text-lg font-bold")
             with ui.row():
                 for controller, name in CONTROLLER_NAMES.items():
                     self.outputs[controller] = ui.checkbox(
@@ -295,8 +337,10 @@ class Editor:
                     "Generate files", icon="play_arrow", on_click=self._generate
                 ).mark("generate")
                 ui.label(f"to {self.settings.out_dir.as_posix()}/<controller>/").classes("text-sm")
-            ui.label("Same result from the command line:").classes("text-sm mt-2")
-            with ui.row().classes("w-full no-wrap items-center"):
+            with (
+                ui.expansion("Command-line equivalent", icon="terminal").classes("w-full"),
+                ui.row().classes("w-full no-wrap items-center"),
+            ):
                 self.command = (
                     ui.label().classes("font-mono text-xs break-all grow").mark("cli-command")
                 )
@@ -407,22 +451,23 @@ class Editor:
         with self._quiet():
             for (form, name), element in self.inputs.items():
                 element.value = getattr(self._form(form), name)
+            self.zero.value = self.machine.zero
 
     # --- Events ------------------------------------------------------------------------------
 
     def _on_input(self) -> None:
         if self._loading:
             return
-        machine = self.machine
-        before = machine.coordinates
         self._read_inputs()
-        if machine.coordinates != before:  # convert between travel + home and explicit limits
-            wanted, machine.coordinates = machine.coordinates, before
-            if wanted == LIMITS:
-                machine.use_limits()
-            else:
-                machine.use_travel()
-            self._write_inputs()
+        self._refresh()
+
+    def _on_zero(self) -> None:
+        """Where machine zero is: converts the travel fields to match, then shows them."""
+        if self._loading:
+            return
+        self._read_inputs()  # keep any other edit made since the last refresh
+        self.machine.set_zero(self.zero.value)
+        self._write_inputs()
         self._refresh()
 
     def _on_output(self, controller: Controller, checked: bool) -> None:
@@ -457,28 +502,111 @@ class Editor:
             with self._quiet():
                 self.bars[kind.key].select.value = kind.loaded
 
-    def _duplicate(self, kind: _Kind) -> None:
-        base, number = kind.entry_id or kind.noun, 2
+    async def _rename(self, kind: _Kind) -> None:
+        """Give the entry a new name. Like any edit, it takes effect in the file on Save."""
+        current = kind.entry_id
+        name = await self._ask_name(
+            kind,
+            f"Rename {kind.noun} {current}",
+            current,
+            "Rename",
+            allowed="" if kind.new else kind.loaded,
+        )
+        if name is not None and name != current:
+            setattr(kind.form, kind.id_field, name)
+            self._refresh()
+
+    async def _duplicate(self, kind: _Kind) -> None:
+        """Copy the entry (with any unsaved edits) into a new one, named in a dialog."""
+        base, number = kind.entry_id, 2
         while f"{base}_{number}" in kind.saved:
             number += 1
-        setattr(kind.form, kind.id_field, f"{base}_{number}")
-        self._write_inputs()
-        self._refresh()
+        name = await self._ask_name(
+            kind, f"Duplicate {kind.noun} {base} as", f"{base}_{number}", "Duplicate"
+        )
+        if name is not None:
+            setattr(kind.form, kind.id_field, name)
+            kind.new = True
+            self._refresh()
 
-    async def _save(self, kind: _Kind) -> None:
-        if problems := kind.problems():
-            ui.notify(f"Fix the {kind.noun} first: {problems[0]}", type="negative")
+    async def _ask_name(
+        self, kind: _Kind, title: str, initial: str, action: str, *, allowed: str = ""
+    ) -> str | None:
+        """Ask for a name in a dialog, checked as you type. None if cancelled."""
+        with ui.dialog() as dialog, ui.card().classes("min-w-[340px]"):
+            ui.label(title).classes("text-lg font-bold")
+            name = (
+                ui.input(f"{kind.noun.capitalize()} name", value=initial)
+                .props("autofocus")
+                .classes("w-full")
+                .without_auto_validation()
+                .mark("name-input")
+            )
+            with ui.row().classes("w-full justify-end"):
+                ui.button("Cancel", on_click=lambda: dialog.submit(None)).props("flat").mark(
+                    "name-cancel"
+                )
+                confirm = ui.button(action, on_click=lambda: dialog.submit(name.value)).mark(
+                    "name-ok"
+                )
+
+        def check() -> None:
+            name.error = kind.name_error(name.value or "", allowed=allowed)
+            confirm.set_enabled(name.error is None)
+
+        def submit_on_enter() -> None:
+            if confirm.enabled:
+                dialog.submit(name.value)
+
+        name.on_value_change(check)
+        name.on("keydown.enter", submit_on_enter)
+        check()
+        result = await dialog
+        dialog.delete()
+        return None if result is None else str(result)
+
+    def _save_changes(self) -> None:
+        """The footer's Save changes: the machine, the profile or both, whichever changed."""
+        self._save((self.machines, self.profiles))
+
+    def _save(self, kinds: tuple[_Kind, ...]) -> None:
+        """Save those of ``kinds`` that changed, or nothing if any of them is invalid."""
+        changed = [kind for kind in kinds if kind.dirty()]
+        if not changed:
             return
-        entry_id = kind.entry_id
-        replaces = entry_id != kind.loaded and entry_id in kind.saved
-        if replaces and not await self._confirm(f"Replace the saved {kind.noun} {entry_id}?"):
-            return
-        persist.save_entry(kind.path, kind.section, entry_id, kind.form.to_table())
-        kind.saved = persist.read_tables(kind.path, kind.section)
-        kind.loaded = entry_id
-        self._update_select(kind)
+        for kind in changed:
+            if problems := kind.problems():
+                ui.notify(f"Fix the {kind.noun} first: {problems[0]}", type="negative")
+                return
+            if kind.entry_id in kind.saved and (kind.new or kind.entry_id != kind.loaded):
+                ui.notify(
+                    f"Another saved {kind.noun} is already called {kind.entry_id}.",
+                    type="negative",
+                )
+                return
+        for kind in changed:
+            renamed_from = None if kind.new else kind.loaded
+            persist.save_entry(
+                kind.path,
+                kind.section,
+                kind.entry_id,
+                kind.form.to_table(),
+                renamed_from=renamed_from,
+            )
+            kind.saved = persist.read_tables(kind.path, kind.section)
+            kind.loaded, kind.new = kind.entry_id, False
+            self._update_select(kind)
         self._refresh()
-        ui.notify(f"Saved {kind.noun} {entry_id} to {kind.path.as_posix()}", type="positive")
+        names = " and ".join(f"{kind.noun} {kind.entry_id}" for kind in changed)
+        ui.notify(f"Saved {names}.", type="positive")
+
+    async def _discard(self) -> None:
+        if not await self._confirm("Discard all unsaved changes?"):
+            return
+        for kind in (self.machines, self.profiles):
+            self._load(kind, kind.loaded)  # a no-op for an entry without changes
+        self._refresh()
+        ui.notify("Unsaved changes discarded.")
 
     async def _delete(self, kind: _Kind) -> None:
         if not await self._confirm(
@@ -525,7 +653,7 @@ class Editor:
         loaded = type(kind.form).from_table(entry_id, kind.saved[entry_id])
         for item in fields(loaded):
             setattr(kind.form, item.name, getattr(loaded, item.name))
-        kind.loaded = entry_id
+        kind.loaded, kind.new = entry_id, False
         self._write_inputs()
         self._update_select(kind)
 
@@ -640,7 +768,7 @@ class Editor:
                 name.text = (
                     "Fix the problems to see this program."
                     if selected
-                    else ("Not selected under Output.")
+                    else "Not selected under Generate."
                 )
                 code.set_content("")
             else:
@@ -651,11 +779,32 @@ class Editor:
     def _show_actions(self) -> None:
         errors = bool(self.result is None or self.result.errors)
         self.generate_button.set_enabled(not errors)
+
+        changed, all_savable = [], True
         for kind in (self.machines, self.profiles):
             bar = self.bars[kind.key]
-            bar.badge.set_visibility(kind.dirty())
-            bar.save.set_enabled(not kind.problems())
-            bar.delete.set_enabled(kind.loaded in kind.saved and len(kind.saved) > 1)
+            bar.title.text = f"{kind.title} {kind.entry_id}"
+            if kind.new:
+                bar.badge.text = "new, not saved yet"
+            elif kind.entry_id != kind.loaded:
+                bar.badge.text = f"renamed from {kind.loaded}, not saved yet"
+            else:
+                bar.badge.text = "unsaved changes"
+            dirty = kind.dirty()
+            savable = dirty and not kind.problems()
+            if dirty:
+                changed.append(kind)
+                all_savable &= savable
+            bar.badge.set_visibility(dirty)
+            bar.save.set_enabled(savable)
+            bar.delete.set_enabled(not kind.new and len(kind.saved) > 1)
+
+        self.footer.set_visibility(bool(changed))
+        self.unsaved.text = "Unsaved changes to " + " and ".join(
+            f"{kind.noun} {kind.entry_id}" for kind in changed
+        )
+        self.save_button.set_enabled(all_savable)
+
         command = None if errors else self._cli_command()
-        self.command.text = command or "Save the machine and profile to generate from the CLI."
+        self.command.text = command or "Save your changes to generate the same from the CLI."
         self.copy_button.set_enabled(command is not None)

@@ -80,6 +80,37 @@ def test_switching_back_to_travel_keeps_the_lengths(limits: tuple[float, float],
     assert (form.coordinates, form.travel_x, form.travel_y, form.home) == (TRAVEL, 762, 10, home)
 
 
+def test_machine_zero_is_the_home_end_or_custom_limits() -> None:
+    assert MachineForm(home="min").zero == "min"
+    assert MachineForm(coordinates=LIMITS, home="min").zero == LIMITS
+
+
+def test_setting_zero_to_an_end_keeps_the_travel() -> None:
+    form = MachineForm(travel_x=762, home="max")
+
+    form.set_zero("min")
+
+    assert (form.coordinates, form.home, form.travel_x) == (TRAVEL, "min", 762)
+
+
+def test_setting_zero_to_custom_converts_once_and_keeps_edited_limits() -> None:
+    form = MachineForm(travel_x=762, travel_y=508, travel_z=500, home="max")
+
+    form.set_zero(LIMITS)
+    form.x_min = -700
+    form.set_zero(LIMITS)
+
+    assert (form.coordinates, form.x_min, form.x_max) == (LIMITS, -700, 0)
+
+
+def test_setting_zero_to_an_end_from_custom_limits_keeps_the_lengths() -> None:
+    form = MachineForm(coordinates=LIMITS, x_min=-762, x_max=0, y_min=-508, y_max=0)
+
+    form.set_zero("min")  # the answer wins over what the limits suggested (max)
+
+    assert (form.coordinates, form.home, form.travel_x, form.travel_y) == (TRAVEL, "min", 762, 508)
+
+
 def test_incomplete_travel_is_not_converted() -> None:
     form = MachineForm(travel_x=None)
 

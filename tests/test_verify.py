@@ -53,7 +53,7 @@ def test_shipped_programs_do_exactly_what_the_plan_says(
     assert verify(plan, render(plan, controller)) == []
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)  # renders and replays 2 programs: slow on a cold run
 @given(plans)
 def test_any_plan_round_trips_through_both_posts(plan: WarmupPlan) -> None:
     for controller in Controller:

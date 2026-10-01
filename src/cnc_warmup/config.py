@@ -157,6 +157,26 @@ def _read_toml(path: Path) -> dict[str, Any]:
     raise ConfigError([Issue("", message, source=source)])
 
 
+# --- Names -----------------------------------------------------------------------
+
+
+def machine_id_problem(machine_id: str) -> str | None:
+    """Why ``machine_id`` can't name a machine, or None if it can."""
+    if _MACHINE_ID.fullmatch(machine_id):
+        return None
+    return (
+        "machine ID must be 1-16 letters, digits, '_' or '-', starting with a letter or "
+        "digit, because it becomes part of program and file names"
+    )
+
+
+def profile_name_problem(name: str) -> str | None:
+    """Why ``name`` can't name a profile, or None if it can."""
+    if _PROFILE_NAME.fullmatch(name):
+        return None
+    return "profile name must be 1-32 lowercase letters, digits or '_', starting with a letter"
+
+
 # --- Machines --------------------------------------------------------------------
 
 
@@ -188,12 +208,8 @@ def _parse_machine(check: "_Checker", machine_id: str, raw: object) -> Machine |
     if check.count > before:
         return None
     check.reject_unknown(table, _MACHINE_KEYS, path)
-    if not _MACHINE_ID.fullmatch(machine_id):
-        check.error(
-            path,
-            "machine ID must be 1-16 letters, digits, '_' or '-', starting with a letter or "
-            "digit, because it becomes part of program and file names",
-        )
+    if problem := machine_id_problem(machine_id):
+        check.error(path, problem)
     x, y, z = _parse_axis_limits(check, table, path)
     machine = Machine(
         id=machine_id,
@@ -320,11 +336,8 @@ def _parse_profile(check: "_Checker", name: str, raw: object) -> WarmupProfile |
     if check.count > before:
         return None
     check.reject_unknown(table, _PROFILE_KEYS, path)
-    if not _PROFILE_NAME.fullmatch(name):
-        check.error(
-            path,
-            "profile name must be 1-32 lowercase letters, digits or '_', starting with a letter",
-        )
+    if problem := profile_name_problem(name):
+        check.error(path, problem)
     feed_start, feed_end = _parse_rising_pair(check, table, path, "feed")
     rpm_start, rpm_end = _parse_rising_pair(check, table, path, "rpm")
     defaults = _PROFILE_DEFAULTS

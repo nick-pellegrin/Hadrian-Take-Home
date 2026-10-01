@@ -153,3 +153,62 @@ def test_crlf_line_endings_are_kept(config: Path) -> None:
     data = path.read_bytes()
     assert b"stages = 6" in data
     assert data.count(b"\n") == data.count(b"\r\n")
+
+
+@pytest.mark.parametrize("old", ["M1", "M2", "M3"])
+def test_renaming_changes_only_the_header_lines(config: Path, old: str) -> None:
+    path = config / "machines.toml"
+    before = path.read_text(encoding="utf-8")
+    table = read_tables(path, "machines")[old]
+
+    save_entry(path, "machines", "MILL_X", table, renamed_from=old)
+
+    expected = before.replace(f"[machines.{old}]", "[machines.MILL_X]").replace(
+        f"[machines.{old}.fanuc]", "[machines.MILL_X.fanuc]"
+    )
+    assert path.read_text(encoding="utf-8") == expected
+    assert list(read_tables(path, "machines")) == [
+        "MILL_X" if key == old else key for key in ("M1", "M2", "M3")
+    ]
+
+
+def test_a_rename_and_an_edit_are_saved_together(config: Path) -> None:
+    path = config / "machines.toml"
+    table = read_tables(path, "machines")["M2"]
+    table["max_feed"] = 25000
+
+    save_entry(path, "machines", "MILL_B", table, renamed_from="M2")
+
+    tables = read_tables(path, "machines")
+    assert list(tables) == ["M1", "MILL_B", "M3"]
+    assert tables["MILL_B"]["max_feed"] == 25000
+    assert "[machines.M2]" not in path.read_text(encoding="utf-8")
+
+
+def test_renaming_a_profile_keeps_its_comments(config: Path) -> None:
+    path = config / "profiles.toml"
+    table = read_tables(path, "profiles")["daily"]
+
+    save_entry(path, "profiles", "morning", table, renamed_from="daily")
+
+    text = path.read_text(encoding="utf-8")
+    assert "[profiles.morning]" in text
+    assert "duration_min = 20                        # Haas and Mazak recommend 20-30 min" in text
+    assert list(read_tables(path, "profiles")) == ["morning", "extended"]
+
+
+def test_renaming_in_a_file_without_section_headers_moves_the_entry(tmp_path: Path) -> None:
+    path = tmp_path / "machines.toml"
+    path.write_text(
+        "[machines]\n"
+        'A = { travel = { x = 100, y = 100, z = 100 }, home = "max" }  # first\n'
+        'B = { travel = { x = 200, y = 200, z = 200 }, home = "max" }\n',
+        encoding="utf-8",
+    )
+    table = read_tables(path, "machines")["A"]
+
+    save_entry(path, "machines", "RENAMED", table, renamed_from="A")
+
+    tables = read_tables(path, "machines")
+    assert list(tables) == ["B", "RENAMED"]  # kept its contents, but not its place
+    assert tables["RENAMED"]["travel"] == {"x": 100, "y": 100, "z": 100}

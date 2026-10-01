@@ -98,6 +98,21 @@ class MachineForm:
             table["fanuc"] = fanuc
         return table
 
+    @property
+    def zero(self) -> str:
+        """Where machine zero is: at the "max" or "min" end of each axis, or LIMITS (custom)."""
+        return LIMITS if self.coordinates == LIMITS else self.home
+
+    def set_zero(self, zero: str) -> None:
+        """Answer "where is machine zero?", converting the travel description to match."""
+        if zero == LIMITS:
+            if self.coordinates != LIMITS:
+                self.use_limits()
+            return
+        if self.coordinates == LIMITS:
+            self.use_travel()
+        self.home = zero
+
     def use_limits(self) -> None:
         """Switch to explicit limits, starting from what travel + home describe."""
         self.coordinates = LIMITS

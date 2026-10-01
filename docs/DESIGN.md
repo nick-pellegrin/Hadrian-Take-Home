@@ -191,14 +191,17 @@ generating programs. The full specification and implementation notes are in
 | **All generation goes through `service.preview_config`** | The UI can't produce anything the CLI couldn't. Every program on screen has passed round-trip verification |
 | The core validator is the only source of field errors, and NiceGUI's auto-validation is disabled | One set of rules and messages for the TOML files, the CLI and the UI |
 | Saving edits TOML **in place** with tomlkit (key by key, bytes in and out) | The files stay human-edited documents: comments, alignment, inline tables and line endings survive a UI save |
+| Renaming rewrites only the entry's `[section.name]` header lines, then re-parses to check nothing else changed | A rename is a two-line diff: the entry keeps its place and comments. Files in another layout fall back to moving the table to the new key |
+| Three numbered steps (Machine, Warm-up profile, Generate). Each card shows the settings most warm-ups change; the rest are in a collapsed **Advanced** section | Feed, speed and duration change often. Machine conventions and safety switches are set once. Showing everything at once made the page read like a config file |
+| One **Save changes / Discard** footer for both cards, shown only while something is unsaved | One place to save, and unsaved work is hard to miss. Save writes only what changed, and nothing if a changed entry is invalid |
+| Machine coordinates are asked as one question, **"Where is machine zero?"** (+ end, − end, or custom limits) | It's what an engineer can answer at the machine. The form converts between `travel` + `home` and explicit `limits` |
+| Names are edited in a validated dialog (✏), not as a form field. Save (just this card), Duplicate and Delete sit in a ⋮ menu | The name is an identity, not a setting. The dialog applies the config's naming rule and rejects names already in use, so a save can never overwrite another entry |
 | The command-line equivalent is shown for saved machines, with profile edits as `--set` overrides | Anything done in the UI can be scripted or reproduced |
 
 ## Controller syntax verification
 
 This section records which controller constructs the generated programs depend on, and
 how each one was verified.
-
-## Controller syntax verification
 
 **Status meanings:**
 - **Documented**: taken directly from the manufacturer's manual; no run-time check possible.

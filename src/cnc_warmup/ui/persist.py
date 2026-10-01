@@ -6,6 +6,7 @@ and only the values that changed are rewritten. Files are read and written as
 bytes, so their line endings are kept as they are.
 """
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -26,9 +27,22 @@ def read_tables(path: Path, section: str) -> dict[str, dict[str, Any]]:
     return {key: entries[key].unwrap() for key in entries}
 
 
-def save_entry(path: Path, section: str, key: str, values: Mapping[str, object]) -> None:
-    """Create or update ``[section.key]`` with ``values``: exactly these keys, in this order."""
+def save_entry(
+    path: Path,
+    section: str,
+    key: str,
+    values: Mapping[str, object],
+    *,
+    renamed_from: str | None = None,
+) -> None:
+    """Create or update ``[section.key]`` with ``values``: exactly these keys, in this order.
+
+    With ``renamed_from``, that existing entry is renamed to ``key`` first. It keeps
+    its place in the file and its comments.
+    """
     document = _read(path)
+    if renamed_from is not None and renamed_from != key:
+        document = _renamed(document, section, renamed_from, key)
     if section not in document:
         document[section] = tomlkit.table(is_super_table=True)
     entries = document[section]
@@ -43,6 +57,32 @@ def delete_entry(path: Path, section: str, key: str) -> None:
     document = _read(path)
     del document[section][key]
     _write(path, document)
+
+
+def _renamed(
+    document: tomlkit.TOMLDocument, section: str, old: str, new: str
+) -> tomlkit.TOMLDocument:
+    """The document with ``[section.old]`` renamed to ``[section.new]``.
+
+    The usual file layout writes each entry under ``[section.old]`` / ``[section.old.sub]``
+    headers. Renaming those header lines changes nothing else, so the entry keeps its
+    place and every comment. The result is checked: same entries, same order, same
+    contents. A file in another layout (e.g. inline tables) falls back to moving the
+    table to the new key at the end of the section, which keeps its comments but not
+    its position.
+    """
+    entries = document[section]
+    header = re.compile(rf"^(\[\s*{re.escape(section)}\s*\.\s*){re.escape(old)}(?=\s*[.\]])", re.M)
+    candidate = tomlkit.parse(
+        header.sub(lambda match: match.group(1) + new, tomlkit.dumps(document))
+    )
+    expected_order = [new if key == old else key for key in entries]
+    renamed = candidate.get(section, {})
+    if list(renamed) == expected_order and renamed[new].unwrap() == entries[old].unwrap():
+        return candidate
+    entries[new] = entries[old]
+    del entries[old]
+    return document
 
 
 def _update(table: Table | InlineTable | Container, values: Mapping[str, object]) -> None:
