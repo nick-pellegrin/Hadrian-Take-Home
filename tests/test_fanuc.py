@@ -225,13 +225,16 @@ def test_positioning_uses_machine_coordinates_z_first(catalog: Catalog) -> None:
     assert codes.index("M00") < first_move
 
 
-def test_stage_reanchors_restates_speed_and_sweeps_incrementally(catalog: Catalog) -> None:
+def test_stage_reanchors_z_first_restates_speed_and_sweeps_incrementally(
+    catalog: Catalog,
+) -> None:
     program = fanuc.render(plan_with(catalog))
     lines = program.text.split("\n")
     stage_2 = next(i for i, line in enumerate(lines) if line.startswith("N200 "))
 
-    assert lines[stage_2 : stage_2 + 4] == [
-        "N200 G90 G53 G00 X-761. Y-507. Z-1. (AT THE SWEEP START CORNER)",
+    assert lines[stage_2 : stage_2 + 5] == [
+        "N200 G90 G53 G00 Z-1. (Z UP FIRST)",  # a restart here clears Z before moving X and Y
+        "G90 G53 G00 X-761. Y-507. (AT THE SWEEP START CORNER)",
         "S3250 M03 (SPINDLE SPEED FOR THIS STAGE)",
         "(PASS 1 OF 3)",
         "G91 G01 X760. F4880 (X+ FULL STROKE)",
@@ -252,14 +255,14 @@ def test_final_rapid_pass_moves_incrementally_at_rapid(catalog: Catalog) -> None
     codes = code_lines(fanuc.render(plan_with(catalog, final_rapid_pass=True)))
     rapid = codes.index("G91 G00 X760.")
 
-    assert codes[rapid - 1] == "G90 G53 G00 X-761. Y-507. Z-1."
+    assert codes[rapid - 2 : rapid] == ["G90 G53 G00 Z-1.", "G90 G53 G00 X-761. Y-507."]
 
 
 def test_single_pass_stage_without_dwell_has_no_pass_labels_or_dwell(catalog: Catalog) -> None:
     # 5 minutes per stage at 800 mm/min: stage 1 is one pass that overruns, so no dwell.
     program = fanuc.render(plan_with(catalog, feed_start=800, duration_min=10, stages=2))
     lines = program.text.split("\n")
-    stage_1 = lines.index("N100 G90 G53 G00 X-761. Y-507. Z-1. (AT THE SWEEP START CORNER)")
+    stage_1 = lines.index("N100 G90 G53 G00 Z-1. (Z UP FIRST)")
     stage_2 = next(i for i, line in enumerate(lines) if line.startswith("N200 "))
 
     assert not any(line.startswith(("(PASS", "G04")) for line in lines[stage_1:stage_2])

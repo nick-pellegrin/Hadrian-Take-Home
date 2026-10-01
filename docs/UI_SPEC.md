@@ -271,11 +271,11 @@ def cli_command(request: GenerationRequest) -> str: ...
 3. **Validation:**
    - Errors mark their field red with the message, and disable **Generate**, **Download**
      and **Save**.
-   - Warnings (e.g. "stage 1 over budget", "Heidenhain output is 104 blocks, over the
-     100-block demo limit") are shown but do not block anything.
+   - Warnings (e.g. "stage 1 runs 8:38, over its 4:00 share of the duration") are shown
+     but do not block anything.
 4. **Unsaved changes:**
-   - A card's title gets an orange badge ("unsaved changes", "renamed from M1, not saved
-     yet" or "new, not saved yet") when it differs from the file.
+   - A card's title gets an orange badge ("unsaved changes" or "renamed from M1, not
+     saved yet") when it differs from the file.
    - The footer appears, naming what's unsaved. **Discard** (after a confirmation)
      reloads both cards from the files.
    - Switching to another saved entry while there are unsaved changes asks first.
@@ -380,8 +380,11 @@ Some interaction details:
 - A rename is an unsaved change ("renamed from M1, not saved yet"). **Save changes**
   renames the entry in the file: only its `[section.name]` header lines change, so it
   keeps its place and comments.
-- **Duplicate…** (⋮ menu) asks for the copy's name, with a free one suggested. The copy
-  is marked "new, not saved yet", and Save changes adds it next to the original.
+- **Duplicate…** (⋮ menu) asks for the copy's name, with a free one suggested, then
+  saves the copy right away and switches to it, so it shows in the saved-entry list.
+  The copy includes any unsaved changes; the original keeps its saved settings (the
+  dialog says so). Duplicate is disabled while the entry has errors, since the copy
+  couldn't be saved.
 - **Where is machine zero?** replaces a travel-or-limits toggle and a home toggle with
   one question an engineer can answer at the machine. Choosing "somewhere else" converts
   the travel to explicit min/max fields, and choosing an end converts back, keeping the
@@ -389,6 +392,6 @@ Some interaction details:
 - Switching entries is **instant** when there are no unsaved changes. Otherwise a
   confirmation dialog appears first.
 - Deleting an entry and discarding changes ask for confirmation. Delete is disabled for
-  an unsaved copy and for the last entry in a file.
+  the last entry in a file.
 - At least one output controller always stays selected.
 - Actions ignore a click that raced a button being disabled; a test covers this.

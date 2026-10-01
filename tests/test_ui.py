@@ -257,31 +257,23 @@ async def test_fanuc_output_needs_a_machine_that_can_run_fanuc(editor: User) -> 
 # --- Saving, deleting, switching ------------------------------------------------------------
 
 
-async def test_duplicate_and_save_adds_a_machine_and_keeps_the_comments(
-    editor: User, project: Path
-) -> None:
+async def test_duplicate_saves_the_copy_and_switches_to_it(editor: User, project: Path) -> None:
     editor.find(marker="machine-duplicate").click()
     await editor.should_see("Duplicate machine M1 as")
     assert element(editor, "name-input").value == "M1_2"  # a free name is suggested
+    assert "saved right away" in text(editor, "name-note")
     editor.find(marker="name-ok").click()
-    await editor.should_not_see(marker="name-input")
+    await editor.should_see("Saved machine M1_2, a copy of M1.")
+
+    select = element(editor, "machine-select")
+    assert (select.value, select.options) == ("M1_2", ["M1", "M2", "M3", "M1_2"])
     assert text(editor, "machine-title") == "Machine M1_2"
-    assert text(editor, "machine-unsaved") == "new, not saved yet"
-    assert not element(editor, "machine-delete").enabled  # nothing in the file to delete yet
-    change(editor, "machine-travel_x", 900)
-
-    editor.find(marker="save").click()
-    await editor.should_see("Saved machine M1_2.")
-
+    await editor.should_not_see(marker="machine-unsaved")  # nothing left to save
     saved = machines_file(project)
     assert "# ASSUMPTIONS - not stated in the assignment" in saved
-    machine = tomllib.loads(saved)["machines"]["M1_2"]
-    assert machine["travel"] == {"x": 900, "y": 508, "z": 500}
-    assert machine["fanuc"] == {"program_number": 8001, "cancel_codes": ["G69"]}
-    assert element(editor, "machine-select").options == ["M1", "M2", "M3", "M1_2"]
-    await editor.should_not_see(marker="machine-unsaved")
-
-    assert "[machines.M1]" in saved  # the original is untouched
+    machines = tomllib.loads(saved)["machines"]
+    assert machines["M1_2"] == machines["M1"]
+    assert element(editor, "machine-delete").enabled  # the copy is in the file
 
     change(editor, "machine-select", "M1")
     editor.find(marker="machine-duplicate").click()
@@ -290,6 +282,35 @@ async def test_duplicate_and_save_adds_a_machine_and_keeps_the_comments(
     editor.find(marker="name-cancel").click()
     await editor.should_not_see(marker="name-input")
     assert text(editor, "machine-title") == "Machine M1"
+    assert machines_file(project) == saved  # cancelling writes nothing
+
+
+async def test_a_duplicate_takes_the_unsaved_edits_and_the_original_keeps_its_own(
+    editor: User, project: Path
+) -> None:
+    change(editor, "profile-feed_end", 11000)  # not saved
+
+    await name_in_dialog(editor, "profile-duplicate", "fast")
+
+    profiles = tomllib.loads(profiles_file(project))["profiles"]
+    assert (profiles["fast"]["feed_end"], profiles["daily"]["feed_end"]) == (11000, 12000)
+    assert element(editor, "profile-select").value == "fast"
+    await editor.should_not_see(marker="profile-unsaved")
+
+
+async def test_an_invalid_entry_cannot_be_duplicated(
+    session: tuple[User, Editor], project: Path
+) -> None:
+    user, page = session
+    before = machines_file(project)
+    change(user, "machine-travel_y", None)
+
+    assert not element(user, "machine-duplicate").enabled
+    with user:
+        await page._duplicate(page.machines)  # a click that raced the item being disabled
+
+    await user.should_see("Fix the machine first: machines.M1.travel.y: missing required key")
+    assert machines_file(project) == before
 
 
 async def test_saving_a_profile_updates_it_in_place(editor: User, project: Path) -> None:
@@ -426,7 +447,7 @@ async def test_save_changes_saves_nothing_if_either_is_invalid(editor: User, pro
 
 async def test_discard_restores_the_saved_entries(editor: User, project: Path) -> None:
     before = machines_file(project)
-    await name_in_dialog(editor, "machine-duplicate", "MILL_B")
+    await name_in_dialog(editor, "machine-rename", "MILL_B")
     change(editor, "profile-feed_end", 11000)
 
     editor.find(marker="discard").click()

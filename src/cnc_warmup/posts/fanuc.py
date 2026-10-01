@@ -8,8 +8,8 @@ Program layout::
     [travel check: stroke limits PRM[1320]/PRM[1321] against the sweep, #3000 alarm]
     [operator checklist, M00]
     G90 G53 G00 to the start corner, spindle on
-    stages N100, N200, ...: re-anchor at the start corner, S.. M03, the passes as
-        G91 G01 moves, G90, G04 dwell
+    stages N100, N200, ...: re-anchor at the start corner (Z first), S.. M03, the
+        passes as G91 G01 moves, G90, G04 dwell
     shutdown, M30
     %
 
@@ -128,7 +128,7 @@ def render(plan: WarmupPlan) -> Program:
             case RunStage(stage=stage):
                 _stage(out, plan, stage, coolant)
             case RapidSweep():
-                out.add(f"G90 G53 G00 {_absolute(_position(plan.envelope.start))}", "start corner")
+                _anchor(out, plan.envelope.start)
                 _sweep(out, plan, "G00", feed=None, labels=True)
                 out.add("G90", "back to absolute")
             case ProgramEnd():
@@ -180,9 +180,18 @@ def _travel_check(out: "_Lines", envelope: Envelope) -> None:
         )
 
 
+def _anchor(out: "_Lines", start: Point, block: str = "") -> None:
+    """Back to the start corner, Z up first.
+
+    In a normal run the machine is already there, so nothing moves. After a restart at
+    a stage, Z clears the travel before X and Y move, like the program's first moves.
+    """
+    out.add(f"{block}G90 G53 G00 Z{_coord(start.z)}", "Z up first")
+    out.add(f"G90 G53 G00 X{_coord(start.x)} Y{_coord(start.y)}", "at the sweep start corner")
+
+
 def _stage(out: "_Lines", plan: WarmupPlan, stage: Stage, coolant: bool) -> None:
-    start = _position(plan.envelope.start)
-    out.add(f"N{stage.number * 100} G90 G53 G00 {_absolute(start)}", "at the sweep start corner")
+    _anchor(out, plan.envelope.start, f"N{stage.number * 100} ")
     out.add(f"S{_rpm(stage.rpm)} M03", "spindle speed for this stage")
     if coolant:
         out.add("M08", "flood coolant on")
@@ -229,10 +238,6 @@ def _increments(here: Point, target: Point) -> str:
     return " ".join(
         f"{axis.upper()}{_coord(delta)}" for axis, delta in deltas if format_number(delta) != "0"
     )
-
-
-def _position(point: Point) -> Position:
-    return Position(point.x, point.y, point.z)
 
 
 def _coord(value: float) -> str:

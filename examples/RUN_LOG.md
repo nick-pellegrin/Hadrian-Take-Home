@@ -52,17 +52,17 @@ Generate every example program: 3 machines x 2 profiles x 2 controllers. Each pr
 $ uv run cnc-warmup generate --all --controller heidenhain fanuc -o examples
 Machine  Profile   Controller  File                                      Size       Run time    Check
 M1       daily     heidenhain  examples/heidenhain/WARMUP_M1_DAILY.H     106 lines  est. 19:57  verified
-M1       daily     fanuc       examples/fanuc/O8001_M1_DAILY.nc          305 lines  est. 19:57  verified
+M1       daily     fanuc       examples/fanuc/O8001_M1_DAILY.nc          310 lines  est. 19:57  verified
 M1       extended  heidenhain  examples/heidenhain/WARMUP_M1_EXTENDED.H  116 lines  est. 29:57  verified
-M1       extended  fanuc       examples/fanuc/O8001_M1_EXTENDED.nc       356 lines  est. 29:57  verified
+M1       extended  fanuc       examples/fanuc/O8001_M1_EXTENDED.nc       362 lines  est. 29:57  verified
 M2       daily     heidenhain  examples/heidenhain/WARMUP_M2_DAILY.H     106 lines  est. 19:58  verified
-M2       daily     fanuc       examples/fanuc/O8002_M2_DAILY.nc          250 lines  est. 19:58  verified
+M2       daily     fanuc       examples/fanuc/O8002_M2_DAILY.nc          255 lines  est. 19:58  verified
 M2       extended  heidenhain  examples/heidenhain/WARMUP_M2_EXTENDED.H  114 lines  est. 29:58  verified
-M2       extended  fanuc       examples/fanuc/O8002_M2_EXTENDED.nc       289 lines  est. 29:58  verified
+M2       extended  fanuc       examples/fanuc/O8002_M2_EXTENDED.nc       295 lines  est. 29:58  verified
 M3       daily     heidenhain  examples/heidenhain/WARMUP_M3_DAILY.H     106 lines  est. 19:58  verified
-M3       daily     fanuc       examples/fanuc/O8003_M3_DAILY.nc          239 lines  est. 19:58  verified
+M3       daily     fanuc       examples/fanuc/O8003_M3_DAILY.nc          244 lines  est. 19:58  verified
 M3       extended  heidenhain  examples/heidenhain/WARMUP_M3_EXTENDED.H  114 lines  est. 29:56  verified
-M3       extended  fanuc       examples/fanuc/O8003_M3_EXTENDED.nc       267 lines  est. 29:56  verified
+M3       extended  fanuc       examples/fanuc/O8003_M3_EXTENDED.nc       273 lines  est. 29:56  verified
 
 Wrote 12 programs to examples/.
 ```

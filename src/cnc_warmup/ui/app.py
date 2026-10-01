@@ -93,25 +93,15 @@ class _Kind:
     parse: Callable[..., Mapping[str, object]]
     name_problem: Callable[[str], str | None]  # the config's naming rule
     saved: dict[str, dict[str, Any]] = field(default_factory=dict)
-    loaded: str = ""  # the saved entry the form was loaded from (or copied from, if new)
-    new: bool = False  # a duplicate that isn't in the file yet
+    loaded: str = ""  # the saved entry the form was loaded from
 
     @property
     def entry_id(self) -> str:
         return str(getattr(self.form, self.id_field))
 
-    def saved_form(self) -> MachineForm | ProfileForm | None:
-        table = self.saved.get(self.loaded)
-        return None if table is None else type(self.form).from_table(self.loaded, table)
-
     def dirty(self) -> bool:
-        saved = self.saved_form()
-        return (
-            self.new
-            or saved is None
-            or self.entry_id != self.loaded
-            or self.form.to_table() != saved.to_table()
-        )
+        saved = type(self.form).from_table(self.loaded, self.saved[self.loaded])
+        return self.entry_id != self.loaded or self.form.to_table() != saved.to_table()
 
     def name_error(self, name: str, *, allowed: str = "") -> str | None:
         """Why ``name`` can't be used for this entry: the naming rule, or already taken.
@@ -135,12 +125,13 @@ class _Kind:
 
 @dataclass(frozen=True)
 class _EntryBar:
-    """A card's title, unsaved-changes badge, saved-entry select, and Save/Delete menu items."""
+    """A card's title, unsaved-changes badge, saved-entry select, and its menu's items."""
 
     title: ui.label
     badge: ui.badge
     select: ui.select
     save: ui.menu_item
+    duplicate: ui.menu_item
     delete: ui.menu_item
 
 
@@ -253,13 +244,13 @@ class Editor:
                 save = ui.menu_item("Save", on_click=lambda: self._save((kind,))).mark(
                     f"{kind.key}-save"
                 )
-                ui.menu_item("Duplicate...", on_click=lambda: self._duplicate(kind)).mark(
-                    f"{kind.key}-duplicate"
-                )
+                duplicate = ui.menu_item(
+                    "Duplicate...", on_click=lambda: self._duplicate(kind)
+                ).mark(f"{kind.key}-duplicate")
                 delete = ui.menu_item("Delete...", on_click=lambda: self._delete(kind)).mark(
                     f"{kind.key}-delete"
                 )
-        self.bars[kind.key] = _EntryBar(title, badge, select, save, delete)
+        self.bars[kind.key] = _EntryBar(title, badge, select, save, duplicate, delete)
 
     def _machine_card(self) -> None:
         with ui.card().classes(CARD_SIZE):
@@ -560,35 +551,56 @@ class Editor:
         """Give the entry a new name. Like any edit, it takes effect in the file on Save."""
         current = kind.entry_id
         name = await self._ask_name(
-            kind,
-            f"Rename {kind.noun} {current}",
-            current,
-            "Rename",
-            allowed="" if kind.new else kind.loaded,
+            kind, f"Rename {kind.noun} {current}", current, "Rename", allowed=kind.loaded
         )
         if name is not None and name != current:
             setattr(kind.form, kind.id_field, name)
             self._refresh()
 
     async def _duplicate(self, kind: _Kind) -> None:
-        """Copy the entry (with any unsaved edits) into a new one, named in a dialog."""
+        """Save a copy of the entry (with any unsaved edits) under a new name, and switch to it.
+
+        The original keeps its saved settings.
+        """
+        if problems := kind.problems():  # a click that raced the menu item being disabled
+            ui.notify(f"Fix the {kind.noun} first: {problems[0]}", type="negative")
+            return
         base, number = kind.entry_id, 2
         while f"{base}_{number}" in kind.saved:
             number += 1
         name = await self._ask_name(
-            kind, f"Duplicate {kind.noun} {base} as", f"{base}_{number}", "Duplicate"
+            kind,
+            f"Duplicate {kind.noun} {base} as",
+            f"{base}_{number}",
+            "Duplicate",
+            note=f"The copy is saved right away, with any unsaved changes. "
+            f"{kind.loaded} keeps its saved settings.",
         )
-        if name is not None:
-            setattr(kind.form, kind.id_field, name)
-            kind.new = True
-            self._refresh()
+        if name is None:
+            return
+        persist.save_entry(kind.path, kind.section, name, kind.form.to_table())
+        kind.saved = persist.read_tables(kind.path, kind.section)
+        setattr(kind.form, kind.id_field, name)
+        kind.loaded = name
+        self._update_select(kind)
+        self._refresh()
+        ui.notify(f"Saved {kind.noun} {name}, a copy of {base}.", type="positive")
 
     async def _ask_name(
-        self, kind: _Kind, title: str, initial: str, action: str, *, allowed: str = ""
+        self,
+        kind: _Kind,
+        title: str,
+        initial: str,
+        action: str,
+        *,
+        allowed: str = "",
+        note: str = "",
     ) -> str | None:
         """Ask for a name in a dialog, checked as you type. None if cancelled."""
-        with ui.dialog() as dialog, ui.card().classes("min-w-[340px]"):
+        with ui.dialog() as dialog, ui.card().classes("min-w-[340px] max-w-[420px]"):
             ui.label(title).classes("text-lg font-bold")
+            if note:
+                ui.label(note).classes("text-sm").mark("name-note")
             name = (
                 ui.input(f"{kind.noun.capitalize()} name", value=initial)
                 .props("autofocus")
@@ -632,23 +644,22 @@ class Editor:
             if problems := kind.problems():
                 ui.notify(f"Fix the {kind.noun} first: {problems[0]}", type="negative")
                 return
-            if kind.entry_id in kind.saved and (kind.new or kind.entry_id != kind.loaded):
+            if kind.entry_id != kind.loaded and kind.entry_id in kind.saved:
                 ui.notify(
                     f"Another saved {kind.noun} is already called {kind.entry_id}.",
                     type="negative",
                 )
                 return
         for kind in changed:
-            renamed_from = None if kind.new else kind.loaded
             persist.save_entry(
                 kind.path,
                 kind.section,
                 kind.entry_id,
                 kind.form.to_table(),
-                renamed_from=renamed_from,
+                renamed_from=kind.loaded,
             )
             kind.saved = persist.read_tables(kind.path, kind.section)
-            kind.loaded, kind.new = kind.entry_id, False
+            kind.loaded = kind.entry_id
             self._update_select(kind)
         self._refresh()
         names = " and ".join(f"{kind.noun} {kind.entry_id}" for kind in changed)
@@ -708,7 +719,7 @@ class Editor:
         loaded = type(kind.form).from_table(entry_id, kind.saved[entry_id])
         for item in fields(loaded):
             setattr(kind.form, item.name, getattr(loaded, item.name))
-        kind.loaded, kind.new = entry_id, False
+        kind.loaded = entry_id
         self._write_inputs()
         self._update_select(kind)
 
@@ -855,20 +866,18 @@ class Editor:
         for kind in (self.machines, self.profiles):
             bar = self.bars[kind.key]
             bar.title.text = f"{kind.title} {kind.entry_id}"
-            if kind.new:
-                bar.badge.text = "new, not saved yet"
-            elif kind.entry_id != kind.loaded:
+            if kind.entry_id != kind.loaded:
                 bar.badge.text = f"renamed from {kind.loaded}, not saved yet"
             else:
                 bar.badge.text = "unsaved changes"
-            dirty = kind.dirty()
-            savable = dirty and not kind.problems()
+            dirty, valid = kind.dirty(), not kind.problems()
             if dirty:
                 changed.append(kind)
-                all_savable &= savable
+                all_savable &= valid
             bar.badge.set_visibility(dirty)
-            bar.save.set_enabled(savable)
-            bar.delete.set_enabled(not kind.new and len(kind.saved) > 1)
+            bar.save.set_enabled(dirty and valid)
+            bar.duplicate.set_enabled(valid)
+            bar.delete.set_enabled(len(kind.saved) > 1)
 
         self.footer.set_visibility(bool(changed))
         self.unsaved.text = "Unsaved changes to " + " and ".join(
