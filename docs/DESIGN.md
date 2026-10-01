@@ -1,7 +1,20 @@
 # Design notes
 
-This file records the design decisions behind the warm-up generator and the evidence for
-them. Decisions are added as each part of the generator lands.
+The design decisions behind the warm-up generator, and the evidence for them. The
+generator runs as a pipeline, and each section below covers one stage:
+
+```
+config/*.toml ─► config ─► plan ─► posts (Heidenhain, Fanuc) ─► verify ─► files
+                                        ▲
+                         service (shared by the CLI and the UI)
+```
+
+- [Configuration](#configuration): loading and validating machines and profiles.
+- [Planner](#planner): the controller-neutral warm-up plan, where every safety decision is made.
+- [Heidenhain TNC 640 post](#heidenhain-tnc-640-post) and [Fanuc 31i post](#fanuc-31i-post): writing the plan as NC code.
+- [Round-trip verification](#round-trip-verification): reading each program back and checking it against the plan.
+- [Service layer and CLI](#service-layer-and-cli) and [Configurator UI](#configurator-ui): the two front ends.
+- [Controller syntax verification](#controller-syntax-verification): each controller construct the programs rely on, and its source.
 
 ## Configuration
 
@@ -55,7 +68,7 @@ safe start ─► [runtime guard] ─► [operator stop] ─► retract Z ─►
 | The runtime guard checks that the **commanded envelope** fits inside the control's soft limits | This is the exact safety condition. It catches a program generated for a larger machine. A program for a *smaller* machine still passes, which is safe but sweeps less than the full travel |
 | Park at the XY center with Z at the top | A neutral position that leaves the table accessible |
 | The runtime estimate covers the stages only | Rapid positioning and acceleration are excluded, and the optional rapid pass is estimated at `max_feed`, because the machine's rapid rate isn't configured. The estimate is labeled as such in the output |
-| `trace(plan)` flattens the plan into moves and dwells | Property tests check the safety invariants on it across random machines and profiles. Phase 6 compares it with the programs parsed back from each post |
+| `trace(plan)` flattens the plan into moves and dwells | Property tests check the safety invariants on it across random machines and profiles. The round-trip verifier compares it with the programs read back from each post |
 
 ## Heidenhain TNC 640 post
 
@@ -79,15 +92,16 @@ byte; regenerate them with `uv run pytest --update-golden`.
 | The header lists the settings, the sweep envelope and the stage table, but **no timestamp** | The operator sees what will run. Regenerating produces identical bytes, so diffs and golden tests only show real changes |
 | Section headings are structure items (`* - …`) | They appear in the TNC's program structure window, so each stage can be found at a glance |
 
-**Size:** the daily programs are **106 blocks**, or 87 with `runtime_guards = false`. The
-free programming-station demo is limited to 100 blocks. SPK05 in the spike will show
-whether that limit stops a program from running or only from being edited. Until then,
-validate in the demo with the guards turned off.
+**Size:** the programs are 106 blocks (daily) to 116 blocks (the 6-stage extended
+profile), or 87–97 with `runtime_guards = false`. A TNC 640 has no length limit, but the
+free demo of the programming station only saves programs of up to 100 blocks. To try the
+programs there, generate them with the travel check turned off; the check itself is
+covered by the test programs in [`spike/`](spike/README.md).
 
-**Constructs still to confirm in the programming station** (see the table below):
-`TOOL CALL S…` (H9), feed from `QL1` (H4), `FN 18 ID230` values and frame (H6–H7), and
-`FN 14` 1004 text (H18). Each has a one-line fallback in the post: `FEED_PARAM`, the
-`TOOL CALL` format, or turning the guard off.
+**If the programming station rejects a construct,** the change is small (see the table
+below): the feed parameter is one constant (`FEED_PARAM`, e.g. `Q1600` instead of
+`QL1`), the speed change is written in two lines of the post (`TOOL CALL Z S…` instead
+of `TOOL CALL S…`), and `runtime_guards = false` removes the `FN 18` travel check.
 
 ## Fanuc 31i post
 
@@ -101,7 +115,7 @@ examples are in `examples/fanuc/` and are pinned byte for byte, like the Heidenh
 | The retract uses `G90 G53 G00 Z<top>`, not `G91 G28 Z0.` | `G28` goes to the reference point, which is the top of Z only when home is at the + end. Using the configured top keeps Fanuc identical to Heidenhain's M91 behavior for every `home`/`limits` setting |
 | Safe start is `G21` on its own line, then `G17 G40 G49 G80 G90 G94`, then the machine's opted-in cancel codes (`G15`, `G50`, `G50.1 X0. Y0. Z0.`, `G69`) | Units come first, before any coordinates. Length compensation and cutter compensation are cancelled. Rotation, scaling and mirroring would distort G91 increments, but their cancel codes raise alarms on controls without the option, so each machine opts in |
 | Every coordinate has a decimal point (`X760.`). `S` is whole rpm. Dwell is `G04 P<ms>` | With parameter 3401#0 = 0, `X760` means 0.760 mm. `G04 P` takes integer milliseconds and avoids any doubt that a dwell `X` might move the X axis during G91 |
-| Passes are written out in full, with no macro loops or `M98` subprograms | The program runs on any 31i without Custom Macro, and any backplotter can read it. `M98 Q` local subprograms need parameter 6005#0. The cost is longer files (~300 lines for M1 daily) |
+| Passes are written out in full, with no macro loops or `M98` subprograms | Apart from the optional travel check, the program needs no Custom Macro, and any backplotter can read it. `M98 Q` local subprograms need parameter 6005#0. The cost is longer files (~300 lines for M1 daily) |
 | **Each stage re-anchors**, Z first (`N100 G90 G53 G00 Z<top>`, then `G90 G53 G00 X… Y…`), restates `S… M03` and coolant, and starts a new `G91` run | Any stage N-number is a safe restart point: after a restart from a low Z, Z clears the travel before X and Y move, as at the program start. In a normal run both moves go nowhere. The header warns never to restart mid-pass, because the passes are incremental |
 | Travel check: `IF [PRM[1321]/[n] GT <min>] THEN #3000=1(SWEEP EXCEEDS X- LIMIT)`, and the same with 1320/LT for the + side | Same safety condition as Heidenhain: the stored stroke limits must contain the sweep. It needs Custom Macro plus `PRM[]` (30i-B family), so it stays behind `runtime_guards`. Messages are kept to 26 characters or fewer for older alarm displays |
 | The operator check is a plain `M00`, with the checklist as comments | Universal: needs no macro option. It comes before the spindle starts |
@@ -146,14 +160,15 @@ All 12 shipped programs, and both posts' output for 100 random plans per test ru
 only when configured). Round-trip tests prove the programs reproduce `trace()` exactly. So
 the programs have the invariants too.
 
-**What it does not prove:** that the real control accepts the syntax (that's the
-programming-station spike), or behavior that depends on the machine (the frame of the
-`FN 18` values, the units of `PRM`). Those are tracked in the verification log below.
+**What it does not prove:** that the real control accepts the syntax (checked with the
+test programs in [`spike/`](spike/README.md) on a TNC 640 programming station), or
+behavior that depends on the machine (the frame of the `FN 18` values, the units of
+`PRM`). Those are listed in [Controller syntax verification](#controller-syntax-verification).
 
 ## Service layer and CLI
 
-`cnc_warmup.service` is the application layer. The CLI uses it now, and the planned UI
-will use it too, so neither front end holds any generation logic.
+`cnc_warmup.service` is the application layer. Both the CLI and the UI use it, so
+neither front end holds any generation logic.
 
 - `preview(catalog, request)` validates the request, builds the plan, renders each
   requested controller, and **verifies every program by round-trip**. Problems come back
@@ -201,63 +216,74 @@ generating programs. The full specification and implementation notes are in
 
 ## Controller syntax verification
 
-This section records which controller constructs the generated programs depend on, and
-how each one was verified.
+Every controller construct the generated programs depend on, where it comes from, and
+how far it has been confirmed.
 
-**Status meanings:**
-- **Documented**: taken directly from the manufacturer's manual; no run-time check possible.
-- **Pending**: a Phase 0 spike program exists and still needs running (see [`spike/README.md`](spike/README.md)).
-- **Verified**: the spike ran and behaved as expected.
-- **Failed → fallback**: the spike failed; the generator uses the fallback listed.
+**Programming-station check (1 October 2026).** On the TNC 640 programming station, NC
+software 340595 18 SP4 (free demo), these programs were loaded and run in Test Run:
+- `SPK01_LIMITS.H` and `SPK04_GUARD.H` from [`spike/`](spike/README.md);
+- all six warm-up programs (M1–M3, daily and extended), generated with
+  `runtime_guards = false` so they fit the demo's 100-block limit (87–97 blocks).
 
-Programming station NC software version: `__________` *(fill in)*
+Every program loaded with no `ERROR` blocks and ran to the end without errors, pausing at
+the operator `STOP` as intended. SPK04 stopped with error 1004, "Range exceeded", as
+intended. Behavior beyond that (the soft-limit values and their frame, spindle speeds,
+run times) has not been checked yet.
+
+**Status:**
+- **Documented:** stated in the manufacturer's documentation.
+- **Runs in Test Run:** loads with no `ERROR` blocks and runs without errors on the
+  programming station (check above). Notes record what was seen; behavior hasn't been
+  checked beyond that.
+- **To confirm:** not run on the programming station yet. A test program in
+  [`spike/`](spike/README.md) exercises it, and the spike README lists the expected
+  result and the fallback if it fails.
 
 ### Heidenhain TNC 640 (Klartext)
 
 Manual references are to the *TNC 640 Klartext Programming User's Manual, NC SW 34059x-11 (01/2021)*.
 
-| # | Construct | Used for | Source | Spike | Status | Notes / observed |
+| # | Construct | Used for | Source | Test program | Status | Notes |
 |---|---|---|---|---|---|---|
-| H1 | `L X… Y… R0 FMAX M91` | All motion in machine coordinates | §7.3 | SPK01 b21–22 | Pending | |
-| H2 | `M91` ignores presets, datum shifts and **tool length**; radius comp unchanged, hence `R0` | Safe start regardless of offsets | §7.3: *"The tool length will not be taken into account"* | — | Documented | Test Run can't show this; it relies on the manual |
-| H3 | `QLn = <expr>` local parameters | Stage feed, guard values | §9 (QL = local to program) | SPK01, SPK03 | Pending | |
-| H4 | Feed from a parameter: `FQL20` | Stage feed inside the sweep subprogram | Extrapolated from `FQ10` in manual examples | SPK01 b23, SPK03 b27 | Pending | |
-| H5 | Fallback `FQ1600` | Same as H4 | `FQ10` examples; Q1600–1999 user range | SPK01 b24 | Pending | |
-| H6 | `FN 18: SYSREAD QLn = ID230 NR2/NR3 IDX1–3` | Runtime soft-limit guard | System data table, group 230 "Traverse range" | SPK01 | Pending | Record the station's limits here |
-| H7 | ID230 limits are in the same frame as `M91` coordinates | The guard compares config values (in M91 coordinates) against ID230 | §7.3: "machine datum… defines traverse limits" | SPK01 (`QL7 = QL11`, `QL8 = QL16`) | Pending | |
-| H8 | `FN 18 … ID230 NR5` (are the limits active?) | Skip the guard if limits are disabled | System data table | SPK01 b32 | Pending | |
-| H9 | `TOOL CALL S1000` (no number, no axis) changes speed only | Stage spindle-speed steps | §4.1 | SPK02 test A | Pending | |
-| H10 | `TOOL CALL Z S4000` changes speed only | Fallback for H9 | §4.1 | SPK02 test C | Pending | |
-| H11 | `M3`, `M8`, `M5 M9` as their own blocks | Spindle and coolant control | §7.1 ("up to four M functions… or in a separate NC block") | SPK02 | Pending | |
-| H12 | `CYCL DEF 9.0 DWELL TIME` / `CYCL DEF 9.1 DWELL n` | Spindle top-up dwell | Cycles manual, Cycle 9 | SPK02 | Pending | |
-| H13 | `FUNCTION DWELL TIMEn` | Alternative dwell | §10.18 | SPK02 test E | Pending | Depends on the NC SW version |
-| H14 | `STOP` behavior | Operator checklist confirmation | §7.1 | SPK02 test D | Pending | `M0` also stops the spindle (§7.2) |
-| H15 | Named `LBL "…"` subprogram after `M30`, ended by `LBL 0` | Sweep subprogram | §8.2 | SPK03 test A | Pending | |
-| H16 | `CALL LBL n REP m` gives m + 1 executions | Passes per stage | §8.3 | SPK03 test B | Pending | |
-| H17 | `FN 11` / `FN 12` with a literal first operand | Guard comparisons | §9.6 examples | SPK03 test C | Pending | |
-| H18 | `FN 14: ERROR = 1004` shows "Range exceeded" | Guard alarm | §9.8 error list | SPK04 | Pending | |
-| H19 | CRLF `.H` files load cleanly | Output format | — | all | Pending | |
-| H20 | Test Run works without `BLK FORM` | Keeps the output minimal | — | SPK01 | Pending | |
-| H21 | What the demo's 100-block limit blocks (edit, open or run) | Whether compact output is required | Third-party description | SPK05 | Pending | |
-| H22 | Display of long (~120 character) comments | Header formatting | §6.3 (`lineBreak` machine parameter) | SPK02 b2 | Pending | |
-| H23 | `M91` positions are unaffected by the transformation cycles (7 datum shift, 8 mirror, 10 rotation, 11/26 scaling) | Safe start without a reset block (and the header comment saying so) | Reference systems: `M91` programs in the machine coordinate system, while those cycles act in the workpiece and working-plane systems | — | Documented (from the reference-system model, not a per-cycle statement) | Exception to check: the Global Program Settings option's "additive offset (M-CS)" acts in the machine coordinate system |
+| H1 | `L X… Y… R0 FMAX M91` | All motion in machine coordinates | §7.3 | SPK01 | Runs in Test Run | SPK01 and all six warm-ups |
+| H2 | `M91` ignores presets, datum shifts and **tool length**; radius comp unchanged, hence `R0` | Safe start regardless of offsets | §7.3: *"The tool length will not be taken into account"* | — | Documented | Test Run can't show this, so it rests on the manual |
+| H3 | `QLn = <expr>` local parameters | Stage feed, travel-check values | §9 (QL = local to the program) | SPK01, SPK03 | Runs in Test Run | QL values read 0 after SPK01 ended: they are cleared at program end, as local parameters should be |
+| H4 | Feed from a parameter: `FQL1` | Stage feed inside the sweep subprogram | Extrapolated from `FQ10` in the manual's examples | SPK01, SPK03 | Runs in Test Run | `FQL20` in SPK01, `FQL1` in all six warm-ups |
+| H5 | `FQ1600` | Fallback for H4 | `FQ10` examples; Q1600–Q1999 user range | SPK01 | Runs in Test Run | Not needed: H4 works |
+| H6 | `FN 18: SYSREAD QLn = ID230 NR2/NR3 IDX1–3` | Travel check: reads the soft limits | System data table, group 230 "Traverse range" | SPK01 | Runs in Test Run | Values not inspected. SPK01's M91 moves to targets 10 mm inside the values read ran without a limit error and ended at X −2490, Y −990, Z +1640 |
+| H7 | The ID230 limits are in the same frame as `M91` coordinates | The travel check compares them with M91 values | §7.3: "machine datum… defines traverse limits" | SPK01 | To confirm | Consistent with SPK01 (see H6); the direct comparison (QL7 = QL11, QL8 = QL16) wasn't read |
+| H8 | `FN 18 … ID230 NR5` (are the limits active?) | A possible refinement of the travel check | System data table | SPK01 | Runs in Test Run | Value not read. Not used by the programs |
+| H9 | `TOOL CALL S1000` (no number, no axis) changes the speed only | Stage spindle-speed steps | §4.1 | SPK02 | Runs in Test Run | All six warm-ups, 5–6 speed steps each |
+| H10 | `TOOL CALL Z S4000` changes the speed only | Fallback for H9 | §4.1 | SPK02 | To confirm | Not needed: H9 works |
+| H11 | `M3`, `M8`, `M5`, `M9` as their own blocks | Spindle and coolant control | §7.1 ("up to four M functions… or in a separate NC block") | SPK02 | Runs in Test Run (`M3`, `M5`, `M9`) | `M8` to confirm: the shipped profiles have coolant off, so the warm-ups tested don't contain it |
+| H12 | `CYCL DEF 9.0 DWELL TIME` / `CYCL DEF 9.1 DWELL n` | Spindle top-up dwell | Cycles manual, Cycle 9 | SPK02 | Runs in Test Run | All six warm-ups |
+| H13 | `FUNCTION DWELL TIMEn` | Alternative dwell | §10.18 | SPK02 | To confirm | Not used: needs newer NC software |
+| H14 | `STOP` behavior | Operator checklist confirmation | §7.1 | SPK02 | Runs in Test Run | Test Run paused at the checklist and continued on START. `M0` would also stop the spindle (§7.2) |
+| H15 | Named `LBL "…"` subprogram after `M30`, ended by `LBL 0` | Sweep subprogram | §8.2 | SPK03 | Runs in Test Run | All six warm-ups |
+| H16 | `CALL LBL n REP m` gives m + 1 executions | Passes per stage | §8.3 | SPK03 | Runs in Test Run | Runs in all six warm-ups; the m + 1 count wasn't checked separately |
+| H17 | `FN 11` / `FN 12` jumps to a named label | Travel-check comparisons | §9.6 examples | SPK03, SPK04 | Runs in Test Run (`FN 12`) | SPK04's `FN 12` jumped to `LBL "TRAVEL_ERR"`. `FN 11` to confirm (SPK03) |
+| H18 | `FN 14: ERROR = 1004` shows "Range exceeded" | Travel-check alarm | §9.8 error list | SPK04 | Runs in Test Run | Stopped with error 1004, "Range exceeded" |
+| H19 | CRLF `.H` files load cleanly | Output format | — | all | Runs in Test Run | Every file tested |
+| H20 | Test Run works without `BLK FORM` | Keeps the output minimal | — | SPK01 | Runs in Test Run | SPK01 and all six warm-ups |
+| H21 | The free demo saves programs of up to 100 blocks | Testing in the demo | HEIDENHAIN programming-station information | SPK05 | Documented | SPK05 would show whether a longer program can still be opened or run |
+| H22 | Display of long (~120 character) comments | Header formatting | §6.3 (`lineBreak` machine parameter) | SPK02 | To confirm | |
+| H23 | `M91` positions are unaffected by the transformation cycles (7 datum shift, 8 mirror, 10 rotation, 11/26 scaling) | Safe start without a reset block (and the header comment saying so) | Reference systems: `M91` programs in the machine coordinate system, while those cycles act in the workpiece and working-plane systems | — | Documented | From the reference-system model rather than a per-cycle statement. Exception: the Global Program Settings option's "additive offset (M-CS)" acts in the machine coordinate system |
 
 ### Fanuc 31i
 
-No Fanuc simulator is available (FANUC NCGuide is licensed). The Fanuc output therefore
-relies on documented behavior plus the generator's own round-trip verifier. Constructs
-that depend on the control model are behind configuration flags.
+No Fanuc simulator was available (FANUC NCGuide is licensed), so the Fanuc output rests on
+documented behavior plus the generator's own round-trip verifier. Constructs that depend
+on the control model are behind configuration flags.
 
 | # | Construct | Used for | Source | Status |
 |---|---|---|---|---|
 | F1 | `G53` is one-shot, **always rapid**, and ignored in `G91` | Absolute positioning only; feed sweeps use `G91` from `G53` anchors | CNC Concepts "Using G53"; Fanuc manual notes | Documented |
-| F2 | `G91 G28 Z0.` retracts via the current position | Safe first move | Standard Fanuc practice | Documented |
-| F3 | Always emit decimal points (`X760.`) | With parameter 3401#0 = 0, `X760` means 0.760 mm | Fanuc parameter manual (DPI) | Documented |
-| F4 | `G04 X30.` (seconds) / `G04 P30000` (ms, no decimal point) | Dwell | Fanuc G04 references | Documented |
-| F5 | `#3006=1(MSG)` stops with a message; `#3000=n(MSG)` raises an alarm | Operator confirmation; guard alarm | Custom Macro B | Documented (needs Macro B) |
-| F6 | `PRM[1320]/[axis]`, `PRM[1321]/[axis]` read the stroke limits | Runtime soft-limit guard | MMS "Accessing parameter values…"; 30i-B | Documented; **model-dependent** (flag) |
-| F7 | `G50`/`G51`, `G68`/`G69`, `G50.1` raise alarms without their options | Configurable modal-cancel line | Fanuc option list | Documented |
-| F8 | O8000–O8999 can be edit-protected; O9000+ belong to the MTB | Program-number range | Fanuc program number areas | Documented |
-| F9 | `IF [<expr>] THEN #3000=1(<message>)` is a valid single-line alarm | Travel check | Custom Macro B IF-THEN form | Documented; unverified on a control |
-| F10 | `PRM[1320]/[n]` returns the stroke limit in mm (not detection units) | Travel check compares it with mm values | 30i-series parameters are real-number type | **Unverified**: if it returns detection units, the check misfires. This is the main reason it sits behind `runtime_guards` |
-| F11 | `G53` needs the reference position established after power-on | Every positioning move | Fanuc manual | Documented. True on any machine with absolute encoders, or after homing |
+| F2 | Always write decimal points (`X760.`) | With parameter 3401#0 = 0, `X760` means 0.760 mm | Fanuc parameter manual (DPI) | Documented |
+| F3 | `G04 P30000` (ms, no decimal point) | Dwell | Fanuc G04 references | Documented |
+| F4 | `#3000=n(MSG)` raises an alarm with a message | Travel-check alarm | Custom Macro B | Documented (needs Custom Macro) |
+| F5 | `IF [<expr>] THEN #3000=1(<message>)` is a valid single-line alarm | Travel check | Custom Macro B IF-THEN form | Documented; not yet run on a control |
+| F6 | `PRM[1320]/[axis]`, `PRM[1321]/[axis]` read the stroke limits | Travel check | MMS "Accessing parameter values…"; 30i-B | Documented; **model-dependent**, so behind `runtime_guards` |
+| F7 | `PRM[1320]/[n]` returns the stroke limit in mm (not detection units) | The travel check compares it with mm values | 30i-series parameters are real-number type | **Not confirmed.** If a control returns detection units, the check passes without catching a mismatch (it can't raise a false alarm). Turn it off with `runtime_guards = false` if in doubt |
+| F8 | `G50`/`G51`, `G68`/`G69`, `G50.1` raise alarms without their options | The machine's opted-in cancel codes | Fanuc option list | Documented |
+| F9 | O8000–O8999 can be edit-protected; O9000+ belong to the machine builder | Program-number range | Fanuc program-number areas | Documented |
+| F10 | `G53` needs the reference position established after power-on | Every positioning move | Fanuc manual | Documented. True on any machine with absolute encoders, or after homing |

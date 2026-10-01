@@ -9,6 +9,15 @@ in two config files, so nothing needs editing in the Python or the generated cod
 The easiest way to use it is the browser UI: set up the machine and the warm-up, check
 the program, and generate it, all on one page (see [Running it](#running-it)).
 
+**Where to look first:**
+- The generated programs for the three machines:
+  [`examples/heidenhain/`](examples/heidenhain/) (e.g.
+  [`WARMUP_M1_DAILY.H`](examples/heidenhain/WARMUP_M1_DAILY.H)) and
+  [`examples/fanuc/`](examples/fanuc/).
+- How they were produced: [`examples/RUN_LOG.md`](examples/RUN_LOG.md), an example run of
+  every command.
+- Why they look the way they do: [`docs/DESIGN.md`](docs/DESIGN.md).
+
 ## What's in the project
 
 | Folder | What it holds |
@@ -17,7 +26,7 @@ the program, and generate it, all on one page (see [Running it](#running-it)).
 | `src/cnc_warmup/` | The generator, in Python. Its core uses only the standard library; the optional UI uses NiceGUI |
 | `examples/` | Generated programs for the three example machines on both controls, and `RUN_LOG.md`, an example run of every command |
 | `tests/` | The test suite (pytest) |
-| `docs/` | `DESIGN.md` (design decisions and the controller syntax the programs rely on), `UI_SPEC.md` (the browser UI) and `spike/` (small programs for checking that syntax on a TNC 640 programming station) |
+| `docs/` | [`DESIGN.md`](docs/DESIGN.md) (design decisions and the controller syntax the programs rely on), [`UI_SPEC.md`](docs/UI_SPEC.md) (the browser UI) and [`spike/`](docs/spike/README.md) (small programs for checking that syntax on a TNC 640 programming station) |
 
 Inside `src/cnc_warmup/`:
 
@@ -99,9 +108,10 @@ the output of each command.
 
 Each program stops for an operator checklist before the spindle starts (unless that's
 turned off in the profile). Still, read the program and dry-run it in the control's
-simulation first. `docs/DESIGN.md` lists the controller syntax the programs rely on, and
-how far each item has been verified (from the manuals, or on the TNC 640 programming
-station).
+simulation first. [`docs/DESIGN.md`](docs/DESIGN.md#controller-syntax-verification) lists
+the controller syntax the programs rely on and where each item comes from, and
+[`docs/spike/README.md`](docs/spike/README.md) explains how to check the Heidenhain
+programs in HEIDENHAIN's free TNC 640 programming station.
 
 ## Development
 
