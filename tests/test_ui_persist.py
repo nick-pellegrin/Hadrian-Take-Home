@@ -126,9 +126,62 @@ def test_saving_a_profile_keeps_its_comments(config: Path) -> None:
     save_entry(path, "profiles", "daily", table)
 
     assert (
-        'coolant = "flood"                          # "off" or "flood" - flood with an empty '
-        "spindle sprays the enclosure\n"
+        'coolant = "flood"                        # "off" or "flood" - flood with an empty '
+        "spindle sprays the enclosure\n"  # the comment stays in its column
     ) in path.read_text(encoding="utf-8")
+
+
+ALIGNED = (
+    "[profiles.p]\n"
+    "feed_end = 12000          # mm/min\n"
+    "edge_margin_mm = 1.0      # mm\n"
+    "operator_confirm = true   # checklist stop\n"
+    "stages = 5\n"
+)
+
+
+def test_saving_unchanged_values_leaves_the_file_as_it_was(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.toml"
+    path.write_text(ALIGNED, encoding="utf-8")
+    values = {"feed_end": 12000, "edge_margin_mm": 1, "operator_confirm": True, "stages": 5}
+
+    save_entry(path, "profiles", "p", values)  # the form writes 1 where the file has 1.0
+
+    assert path.read_text(encoding="utf-8") == ALIGNED
+
+
+def test_a_float_stays_a_float_and_comments_keep_their_column(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.toml"
+    path.write_text(ALIGNED, encoding="utf-8")
+    values = {"feed_end": 9000, "edge_margin_mm": 2, "operator_confirm": False, "stages": 6}
+
+    save_entry(path, "profiles", "p", values)
+
+    assert path.read_text(encoding="utf-8") == (
+        "[profiles.p]\n"
+        "feed_end = 9000           # mm/min\n"
+        "edge_margin_mm = 2.0      # mm\n"
+        "operator_confirm = false  # checklist stop\n"
+        "stages = 6\n"
+    )
+
+
+def test_a_key_the_entry_did_not_have_is_added(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.toml"
+    path.write_text("[profiles.p]\nstages = 5\n", encoding="utf-8")
+
+    save_entry(path, "profiles", "p", {"stages": 5, "ramp": "geometric"})
+
+    assert path.read_text(encoding="utf-8") == '[profiles.p]\nstages = 5\nramp = "geometric"\n'
+
+
+def test_a_value_too_long_for_its_comment_column_keeps_one_space(tmp_path: Path) -> None:
+    path = tmp_path / "profiles.toml"
+    path.write_text('[profiles.p]\ncoolant = "off"  # c\n', encoding="utf-8")
+
+    save_entry(path, "profiles", "p", {"coolant": "flood_coolant"})
+
+    assert path.read_text(encoding="utf-8") == '[profiles.p]\ncoolant = "flood_coolant" # c\n'
 
 
 def test_a_missing_section_is_created(tmp_path: Path) -> None:

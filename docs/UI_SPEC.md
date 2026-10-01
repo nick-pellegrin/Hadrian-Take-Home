@@ -82,10 +82,25 @@ Why NiceGUI:
 
 ## 4. Layout
 
-One page: three numbered steps on the left, the live preview on the right.
+The three steps sit side by side as cards of equal height, centered on the page both
+ways. The output is in a drawer on the right.
 
 - **Common settings first.** Each card shows only what most warm-ups change. Everything
-  else sits in a collapsed **Advanced** section, one click away.
+  else sits in a collapsed **Advanced** section, one click away, at the bottom of the
+  card, so the machine and profile cards' Advanced sections line up. The Generate card
+  keeps **Generate files** and **Command-line equivalent** at its bottom the same way.
+- **Wide controls where there's room.** **Generate files** spans its card. In the
+  profile's Advanced section, the ramp and Z-stroke toggles span the card too; their
+  buttons grow in proportion to their labels, so a long label stays on one line.
+- **The output is one click away.** The **Output** button (icon and label) at the right
+  of the header opens an 860 px drawer. The summary is on top (status, errors and
+  warnings, sweep envelope, run time, stage table) and the generated programs are below,
+  one tab per controller.
+  - While the drawer is closed, a red count on the button shows how many problems block
+    generation. Each problem is also shown under its field.
+  - The drawer pushes the cards aside rather than covering them, so the preview stays
+    live while you edit. The cards shrink from 400 px to 320 px wide to keep all three
+    beside the open drawer on a 1920 px screen. On a narrower window they wrap.
 - **Unsaved work is hard to miss.** A footer with **Save changes** and **Discard** appears
   only while something is unsaved. It covers both cards, and each card's title shows an
   orange badge when that card has unsaved changes.
@@ -95,36 +110,50 @@ One page: three numbered steps on the left, the live preview on the right.
 - **Hadrian's navy (`#002548`)** is the primary colour: header, footer, step numbers,
   buttons and selected toggles.
 
+The page, with the drawer closed:
+
 ```
-┌───────────────────────────────────────────────────────────────────────────────────────────┐
-│ CNC Warm-Up Generator                                                                     │
-├────────────────────────────────────────────┬──────────────────────────────────────────────┤
-│ (1) Machine M1  [unsaved changes]          │ 1 program(s) generated and verified          │
-│   Saved machines [M1      v] [edit] [more] │ [Summary] [Heidenhain TNC 640] [Fanuc 31i]   │
-│   Description [3-axis VMC, 762 x 508…]     │                                              │
-│   X travel [762]  Y [508]  Z [500] mm      │ Sweep envelope X -761..-1 Y … Z …            │
-│   Spindle max [12000] rpm                  │ One sweep pass: 6267 mm                      │
-│   Max feed    [20000] mm/min               │ Estimated run time 19:57                     │
-│   > Advanced: where machine zero is,       │                                              │
-│     Fanuc settings                         │ Stage  RPM   Feed  Passes  Dwell  Time       │
-│                                            │   1   1000   2500     1    89 s   3:59       │
-│ (2) Warm-up profile daily                  │   2   3250   4880     3     8 s   3:59       │
-│   Saved profiles [daily   v] [edit] [more] │   …                                          │
-│   Description [Daily warm-up before…]      │                                              │
-│   Feed at start    [2500] finish [12000]   │ Errors and warnings are listed here.         │
-│   Spindle at start [1000] finish [10000]   │ Program tabs: the exact text written,        │
-│   Duration [20] min  [Coolant off|Flood]   │ with its file name and Download.             │
-│   > Advanced: stages, edge margin, ramp,   │                                              │
-│     moves per pass, Z stroke, safety       │                                              │
-│                                            │                                              │
-│ (3) Generate                               │                                              │
-│   [x] Heidenhain TNC 640  [ ] Fanuc 31i    │                                              │
-│   [> Generate files] to out/<controller>/  │                                              │
-│   > Command-line equivalent                │                                              │
-├────────────────────────────────────────────┴──────────────────────────────────────────────┤
-│                                Unsaved changes to machine M1   [Discard]   [Save changes] │
-│                                                   (only shown while something is unsaved) │
-└───────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ CNC Warm-Up Generator                                                                    [Output](1) │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  ┌ (1) Machine M1 ──────────────┐ ┌ (2) Warm-up profile daily ───┐ ┌ (3) Generate ────────────────┐  │
+│  │ [M1        v] [edit] [more]  │ │ [daily     v] [edit] [more]  │ │ [x] Heidenhain TNC 640       │  │
+│  │ Description [3-axis VMC…]    │ │ Description [Daily warm-up…] │ │ [ ] Fanuc 31i                │  │
+│  │ X [762]  Y [508]  Z [500] mm │ │ Feed [2500] → [12000] mm/min │ │                              │  │
+│  │ Spindle max [12000] rpm      │ │ Spindle [1000] → [10000] rpm │ │                              │  │
+│  │ Max feed [20000] mm/min      │ │ Duration [20] min            │ │                              │  │
+│  │                              │ │ [Coolant off|Flood coolant]  │ │ [>     Generate files      ] │  │
+│  │ > Advanced: machine zero,    │ │ > Advanced: stages, margin,  │ │ > Command-line equivalent    │  │
+│  │   Fanuc settings             │ │   ramp, moves, Z stroke,     │ │                              │  │
+│  │                              │ │   safety                     │ │                              │  │
+│  └──────────────────────────────┘ └──────────────────────────────┘ └──────────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                           Unsaved changes to machine M1   [Discard]   [Save changes] │
+│                                                              (only shown while something is unsaved) │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+The drawer, opened from the header icon:
+
+```
+┌ Output ───────────────────────────── [x] ┐
+│ 1 program(s) generated and verified      │
+│ Errors and warnings, if any              │
+│                                          │
+│ Sweep envelope X -761..-1 Y … Z …        │
+│ One sweep pass: 6267 mm                  │
+│ Estimated run time 19:57                 │
+│                                          │
+│ Stage  RPM   Feed  Passes  Dwell  Time   │
+│   1   1000   2500     1    89 s   3:59   │
+│   …                                      │
+│                                          │
+│ [Heidenhain TNC 640] [Fanuc 31i]         │
+│ WARMUP_M1_DAILY.H   [Download]           │
+│ 0 BEGIN PGM WARMUP_M1_DAILY MM           │
+│ 1 ; WARM-UP FOR MACHINE M1 - …           │
+│ …                                        │
+└──────────────────────────────────────────┘
 ```
 
 ## 5. Fields
@@ -169,8 +198,13 @@ A machine's `controller` key (the CLI's default output) has no field. The UI alw
 starts with Heidenhain checked under Generate, and saving keeps whatever the file says.
 
 **Step 3, Generate:** a checkbox per controller (Heidenhain checked at start, at least
-one always checked), **Generate files**, and a collapsed **Command-line equivalent**
-with a copy button.
+one always checked), a full-width **Generate files** button (its tooltip names the
+output folder), and a collapsed **Command-line equivalent** with a copy button.
+
+Fanuc 31i can only be picked for a machine that can run Fanuc programs. While the
+machine's "This machine can run Fanuc 31i programs" switch is off, the Fanuc checkbox
+is unchecked and disabled. Hovering it, or opening the drawer's Fanuc tab, says where to
+turn it on. Turning the switch back on makes Fanuc available again without picking it.
 
 ## 6. Architecture
 
@@ -246,9 +280,11 @@ def cli_command(request: GenerationRequest) -> str: ...
      reloads both cards from the files.
    - Switching to another saved entry while there are unsaved changes asks first.
 5. **Generate files:**
-   - Writes the selected controllers' programs to the output directory (default `out/`).
-   - Asks before overwriting, then lists the written paths.
-   - Uses the same file names as the CLI (`WARMUP_M1.H`, `O8001.nc`).
+   - Writes the selected controllers' programs to `<output directory>/<controller>/`
+     (default `out/`), replacing earlier files of the same name, and lists the written
+     paths.
+   - Uses the same file names as the CLI (`WARMUP_M1_DAILY.H`, `O8001_M1_DAILY.nc`).
+   - Opens the Output drawer, showing the programs just written and their summary.
 6. **Download:** a browser download of one program. It contains the same bytes as
    Generate, including CRLF for `.H` files.
 7. **Save changes:**
@@ -322,7 +358,7 @@ def cli_command(request: GenerationRequest) -> str: ...
 | Module | Role |
 |---|---|
 | `ui/form.py` | Flat form fields ↔ TOML tables (`MachineForm`, `ProfileForm`), travel ↔ limits conversion, and `field_for(issue)`. No NiceGUI, so it's unit-tested on its own |
-| `ui/persist.py` | Reads the files with tomlkit and updates entries **key by key in place**, so inline comments and inline-table style survive. Files are read and written as bytes to keep CRLF/LF. New entries follow the file's layout (inline `travel`/`limits`, a `[machines.X.fanuc]` section) |
+| `ui/persist.py` | Reads the files with tomlkit and updates entries **key by key in place**, so inline comments and inline-table style survive. Unchanged values keep their exact text (`1.0` stays `1.0`); a changed value keeps the file's number style and its inline comment's column. Files are read and written as bytes to keep CRLF/LF. New entries follow the file's layout (inline `travel`/`limits`, a `[machines.X.fanuc]` section) |
 | `ui/app.py` | The page (`Editor`, one per browser tab). Every change calls `service.preview_config`, the same validation, planning, rendering and **round-trip verification** as the CLI |
 
 | Acceptance criterion (§10) | How it's met / tested (`tests/test_ui*.py`) |

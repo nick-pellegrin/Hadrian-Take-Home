@@ -28,10 +28,6 @@ home = "max"
 spindle_max_rpm = 12000
 max_feed = 20000
 
-[machines.M1.fanuc]
-program_number = 8001                    # O8001 - the O8000-O8999 range can be edit-protected
-cancel_codes = ["G69"]                   # add "G50", "G50.1" only if those options are installed
-
 [machines.M2]
 description = "3-axis VMC, 1016 x 660 x 500 mm travel"
 controller = "heidenhain"

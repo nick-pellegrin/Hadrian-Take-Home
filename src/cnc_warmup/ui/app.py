@@ -5,11 +5,12 @@ validation, planning, rendering and round-trip verification the CLI uses. The UI
 holds no generation logic of its own. Edits stay in the page until saved, and
 saving writes machines.toml / profiles.toml with their comments intact.
 
-The page follows three steps (1 Machine, 2 Warm-up profile, 3 Generate). Each card
-shows only the common settings; everything else sits in a collapsed "Advanced"
-section. One Save changes / Discard pair in the footer covers both cards, and
-appears only when something is unsaved. Each card's ⋮ menu can also save just that
-card.
+The page follows three steps (1 Machine, 2 Warm-up profile, 3 Generate), as cards
+side by side. Each card shows only the common settings; everything else sits in a
+collapsed "Advanced" section. The output (summary, then the generated programs) is
+in a drawer on the right, opened from the Output button in the header. One Save changes /
+Discard pair in the footer covers both cards, and appears only when something is
+unsaved. Each card's ⋮ menu can also save just that card.
 """
 
 from collections.abc import Callable, Coroutine, Iterator, Mapping
@@ -48,7 +49,18 @@ from cnc_warmup.ui.form import LIMITS, MACHINE, PROFILE, TRAVEL, MachineForm, Pr
 
 TITLE = "CNC Warm-Up Generator"
 PRIMARY_COLOR = "#002548"  # Hadrian's navy
+# Cards are 320-400 px wide, so all three still fit beside the open drawer on a 1920 px screen.
+CARD_SIZE = "grow basis-[320px] max-w-[400px]"
+ADVANCED = "w-full mt-auto"  # the Advanced section sits at the bottom of its card
+DRAWER_WIDTH = 860
+# Quasar's desktop tooltips are 10 px; use the 14 px it gives small screens everywhere, and
+# wrap long tooltips instead of letting them run across the page.
+TOOLTIP_CSS = ".q-tooltip--style { font-size: 14px; max-width: 320px; overflow-wrap: anywhere; }"
 CONTROLLER_NAMES = {Controller.HEIDENHAIN: "Heidenhain TNC 640", Controller.FANUC: "Fanuc 31i"}
+FANUC_UNAVAILABLE = (
+    "This machine isn't set up for Fanuc 31i. To generate Fanuc programs, turn on "
+    '"This machine can run Fanuc 31i programs" in the machine\'s Advanced settings.'
+)
 ZERO_OPTIONS = {
     "max": "At the + end of each axis (most VMCs): coordinates run from -travel to 0",
     "min": "At the - end of each axis: coordinates run from 0 to +travel",
@@ -135,6 +147,8 @@ class _EntryBar:
 class Editor:
     """One browser tab: the machine and profile forms, the live preview, and the actions."""
 
+    drawer: ui.right_drawer  # the output panel; the header's icon is built before it
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.machine, self.profile = MachineForm(), ProfileForm()
@@ -179,15 +193,32 @@ class Editor:
 
     def _build(self) -> None:
         ui.colors(primary=PRIMARY_COLOR)
-        with ui.header().classes("items-center"):
+        ui.add_css(TOOLTIP_CSS)
+        with ui.header().classes("items-center justify-between"):
             ui.label(TITLE).classes("text-xl font-bold")
-        with ui.row().classes("w-full no-wrap items-start gap-4"):
-            with ui.column().classes("w-[460px] shrink-0 gap-4"):
-                self._machine_card()
-                self._profile_card()
-                self._generate_card()
-            with ui.column().classes("grow min-w-0"):
-                self._preview_panel()
+            with (
+                ui.button("Output", icon="description", on_click=lambda: self.drawer.toggle())
+                .props("flat no-caps color=white")
+                .tooltip("Summary and generated programs")
+                .mark("output-toggle")
+            ):
+                self.problem_count = (
+                    ui.badge(color="negative").props("floating").mark("problem-count")
+                )
+        # The page content fills the space between header and footer, so the cards can be
+        # centered vertically.
+        ui.context.client.content.classes("justify-center").style("min-height: inherit")
+        # The three steps side by side, all as tall as the tallest, wrapping when the window
+        # (or the open drawer) leaves too little room.
+        with ui.row().classes("w-full justify-center items-stretch gap-4"):
+            self._machine_card()
+            self._profile_card()
+            self._generate_card()
+        with ui.right_drawer(value=False, bordered=True).props(
+            f"width={DRAWER_WIDTH}"
+        ) as self.drawer:
+            self._output_panel()
+        self.drawer.mark("output-drawer")
         with ui.footer().classes("items-center justify-end gap-4") as self.footer:
             self.unsaved = ui.label().mark("unsaved-summary")
             ui.button("Discard", on_click=self._discard).props("flat color=white").mark("discard")
@@ -231,7 +262,7 @@ class Editor:
         self.bars[kind.key] = _EntryBar(title, badge, select, save, delete)
 
     def _machine_card(self) -> None:
-        with ui.card().classes("w-full"):
+        with ui.card().classes(CARD_SIZE):
             self._card_header(self.machines, 1)
             self._text(MACHINE, "description", "Description").classes("w-full")
             with ui.row().classes("w-full no-wrap") as self.travel_box:
@@ -249,7 +280,7 @@ class Editor:
                 self._number(MACHINE, "max_feed", "Max feed", suffix="mm/min").tooltip(
                     "The highest feed a warm-up may use on this machine."
                 )
-            with ui.expansion("Advanced", icon="tune").classes("w-full").mark("machine-advanced"):
+            with ui.expansion("Advanced", icon="tune").classes(ADVANCED).mark("machine-advanced"):
                 ui.label("Where is machine zero? (Heidenhain M91 / Fanuc G53 coordinates)").classes(
                     "text-sm font-medium"
                 )
@@ -271,7 +302,7 @@ class Editor:
                     )
 
     def _profile_card(self) -> None:
-        with ui.card().classes("w-full"):
+        with ui.card().classes(CARD_SIZE):
             self._card_header(self.profiles, 2)
             self._text(PROFILE, "description", "Description").classes("w-full")
             with ui.row().classes("w-full no-wrap"):
@@ -282,10 +313,12 @@ class Editor:
                     "Never start a cold spindle at high speed."
                 )
                 self._number(PROFILE, "rpm_end", "Spindle at finish", suffix="rpm")
-            with ui.row().classes("w-full no-wrap items-center"):
-                self._number(PROFILE, "duration_min", "Duration", suffix="min")
+            with ui.row().classes("w-full items-center"):  # in a narrow card, coolant wraps below
+                self._number(PROFILE, "duration_min", "Duration", suffix="min").classes(
+                    "basis-[120px]"
+                )
                 self._choice(PROFILE, "coolant", {"off": "Coolant off", "flood": "Flood coolant"})
-            with ui.expansion("Advanced", icon="tune").classes("w-full").mark("profile-advanced"):
+            with ui.expansion("Advanced", icon="tune").classes(ADVANCED).mark("profile-advanced"):
                 with ui.row().classes("w-full no-wrap"):
                     self._number(PROFILE, "stages", "Stages", precision=0).tooltip(
                         "Steps from start to finish. Each holds its speed for duration / stages."
@@ -299,6 +332,7 @@ class Editor:
                     PROFILE,
                     "ramp",
                     {"linear": "Equal steps", "geometric": "Smaller steps at low speed"},
+                    spread=True,
                 )
                 self._select(
                     PROFILE,
@@ -310,6 +344,7 @@ class Editor:
                     PROFILE,
                     "z_stroke_at",
                     {"center": "Z stroke at the XY center", "start": "at the start corner"},
+                    spread=True,
                 )
                 ui.label("Safety").classes("text-sm font-medium mt-2")
                 self._switch(
@@ -321,7 +356,7 @@ class Editor:
                 self._switch(PROFILE, "final_rapid_pass", "Finish with one pass at rapid traverse")
 
     def _generate_card(self) -> None:
-        with ui.card().classes("w-full"):
+        with ui.card().classes(CARD_SIZE):
             with ui.row().classes("w-full items-center no-wrap"):
                 ui.label("3").classes(
                     "rounded-full bg-primary text-white w-7 h-7 text-center leading-7 font-bold"
@@ -329,14 +364,20 @@ class Editor:
                 ui.label("Generate").classes("text-lg font-bold")
             with ui.row():
                 for controller, name in CONTROLLER_NAMES.items():
-                    self.outputs[controller] = ui.checkbox(
-                        name, on_change=lambda e, c=controller: self._on_output(c, e.value)
-                    ).mark(f"output-{controller}")
-            with ui.row().classes("items-center"):
-                self.generate_button = ui.button(
-                    "Generate files", icon="play_arrow", on_click=self._generate
-                ).mark("generate")
-                ui.label(f"to {self.settings.out_dir.as_posix()}/<controller>/").classes("text-sm")
+                    with ui.element("div"):  # takes the hover for a tooltip when disabled
+                        self.outputs[controller] = ui.checkbox(
+                            name, on_change=lambda e, c=controller: self._on_output(c, e.value)
+                        ).mark(f"output-{controller}")
+                        if controller is Controller.FANUC:
+                            self.fanuc_unavailable = ui.tooltip(FANUC_UNAVAILABLE).mark(
+                                "fanuc-unavailable"
+                            )
+            self.generate_button = (
+                ui.button("Generate files", icon="play_arrow", on_click=self._generate)
+                .classes("w-full mt-auto")  # it and the command line sit at the card's bottom
+                .tooltip(f"Writes to {self.settings.out_dir.as_posix()}/<controller>/")
+                .mark("generate")
+            )
             with (
                 ui.expansion("Command-line equivalent", icon="terminal").classes("w-full"),
                 ui.row().classes("w-full no-wrap items-center"),
@@ -350,35 +391,40 @@ class Editor:
                     .mark("copy-command")
                 )
 
-    def _preview_panel(self) -> None:
+    def _output_panel(self) -> None:
+        """The drawer's content: the summary on top, the generated programs below."""
+        with ui.row().classes("w-full items-center no-wrap"):
+            ui.label("Output").classes("text-lg font-bold grow")
+            ui.button(icon="close", on_click=self.drawer.hide).props("flat round").tooltip(
+                "Close"
+            ).mark("output-close")
         self.status = ui.label().classes("text-lg font-medium").mark("status")
-        with ui.tabs().classes("w-full") as tabs:
-            summary_tab = ui.tab("Summary")
-            program_tabs = {c: ui.tab(CONTROLLER_NAMES[c]) for c in Controller}
-        with ui.tab_panels(tabs, value=summary_tab).classes("w-full"):
-            with ui.tab_panel(summary_tab):
-                self.issues = ui.column().classes("w-full gap-1")
-                self.overview = ui.label().classes("whitespace-pre-line").mark("overview")
-                self.stage_table = (
-                    ui.table(
-                        columns=[
-                            {"name": key, "label": label, "field": key, "align": "right"}
-                            for key, label in (
-                                ("stage", "Stage"),
-                                ("rpm", "RPM"),
-                                ("feed", "Feed mm/min"),
-                                ("passes", "Passes"),
-                                ("pass_time", "Pass time"),
-                                ("dwell", "Dwell"),
-                                ("time", "Stage time"),
-                            )
-                        ],
-                        rows=[],
-                        row_key="stage",
+        self.issues = ui.column().classes("w-full gap-1")
+        self.overview = ui.label().classes("whitespace-pre-line").mark("overview")
+        self.stage_table = (
+            ui.table(
+                columns=[
+                    {"name": key, "label": label, "field": key, "align": "right"}
+                    for key, label in (
+                        ("stage", "Stage"),
+                        ("rpm", "RPM"),
+                        ("feed", "Feed mm/min"),
+                        ("passes", "Passes"),
+                        ("pass_time", "Pass time"),
+                        ("dwell", "Dwell"),
+                        ("time", "Stage time"),
                     )
-                    .classes("w-full")
-                    .mark("stage-table")
-                )
+                ],
+                rows=[],
+                row_key="stage",
+            )
+            .props("dense flat bordered")
+            .classes("w-full")
+            .mark("stage-table")
+        )
+        with ui.tabs().classes("w-full") as tabs:
+            program_tabs = {c: ui.tab(CONTROLLER_NAMES[c]) for c in Controller}
+        with ui.tab_panels(tabs, value=program_tabs[Controller.HEIDENHAIN]).classes("w-full"):
             self.programs: dict[Controller, tuple[ui.label, ui.button, ui.code]] = {}
             for controller, tab in program_tabs.items():
                 with ui.tab_panel(tab):
@@ -412,8 +458,16 @@ class Editor:
         self._register(form, name, element)
         return element
 
-    def _choice(self, form: str, name: str, options: dict[str, str]) -> ui.toggle:
+    def _choice(
+        self, form: str, name: str, options: dict[str, str], *, spread: bool = False
+    ) -> ui.toggle:
+        """A toggle: compact, or with ``spread`` its buttons share the full width.
+
+        Spread buttons grow in proportion to their labels (unlike Quasar's equal-width
+        ``spread``), so a long label keeps to one line.
+        """
         element = ui.toggle(options, on_change=self._on_input).props("no-caps dense")
+        element.classes("w-full [&>*]:grow" if spread else "whitespace-nowrap")
         self._register(form, name, element)
         return element
 
@@ -624,6 +678,7 @@ class Editor:
             return
         paths = write_programs(self.result, self.settings.out_dir)
         ui.notify(f"Wrote {', '.join(path.as_posix() for path in paths)}", type="positive")
+        self.drawer.show()  # the programs just written, with their summary
 
     def _download(self, controller: Controller) -> None:
         program = self._program(controller)
@@ -691,6 +746,7 @@ class Editor:
         self.travel_box.set_visibility(machine.coordinates == TRAVEL)
         self.limits_box.set_visibility(machine.coordinates == LIMITS)
         self.fanuc_box.set_visibility(machine.fanuc)
+        self._offer_fanuc(machine.fanuc)
 
         controllers = tuple(c for c, box in self.outputs.items() if box.value)
         self.result = preview_config(
@@ -705,6 +761,19 @@ class Editor:
         self._show_programs()
         self._show_actions()
 
+    def _offer_fanuc(self, available: bool) -> None:
+        """Fanuc output needs the machine's Fanuc settings; without them it can't be picked."""
+        fanuc = self.outputs[Controller.FANUC]
+        if not available and fanuc.value:
+            with self._quiet():
+                fanuc.value = False
+                self.outputs[Controller.HEIDENHAIN].value = True  # one output stays selected
+        fanuc.set_enabled(available)
+        if available:
+            self.fanuc_unavailable.props("disable")
+        else:
+            self.fanuc_unavailable.props(remove="disable")
+
     def _show_field_errors(self, issues: tuple[Issue, ...]) -> None:
         messages: dict[tuple[str, str], list[str]] = {}
         for issue in issues:
@@ -716,6 +785,8 @@ class Editor:
 
     def _show_summary(self, result: Preview) -> None:
         errors, warnings = result.errors, result.warnings
+        self.problem_count.text = str(len(errors))  # on the header's output icon
+        self.problem_count.set_visibility(bool(errors))
         if errors:
             self.status.text = f"{len(errors)} problem(s) to fix before generating"
             self.status.classes(replace="text-lg font-medium text-negative")
@@ -764,12 +835,12 @@ class Editor:
         for controller, (name, download, code) in self.programs.items():
             program = self._program(controller)
             if program is None:
-                selected = self.outputs[controller].value
-                name.text = (
-                    "Fix the problems to see this program."
-                    if selected
-                    else "Not selected under Generate."
-                )
+                if controller is Controller.FANUC and not self.machine.fanuc:
+                    name.text = FANUC_UNAVAILABLE
+                elif self.outputs[controller].value:
+                    name.text = "Fix the problems to see this program."
+                else:
+                    name.text = "Not selected under Generate."
                 code.set_content("")
             else:
                 name.text = program.filename

@@ -87,6 +87,8 @@ async def test_page_opens_on_the_first_machine_and_profile_verified(editor: User
     )
     await editor.should_not_see(marker="save")  # the Save/Discard footer: nothing to save
     assert not element(editor, "machine-save").enabled  # nor in the cards' menus
+    assert element(editor, "output-drawer").value is False  # the output starts closed
+    await editor.should_not_see(marker="problem-count")
     [colors] = editor.find(kind=nicegui.ui.colors).elements
     assert colors.props["primary"] == "#002548"  # Hadrian's navy
     assert text(editor, "status") == "1 program(s) generated and verified against the plan"
@@ -133,6 +135,17 @@ async def test_errors_show_under_their_field_and_block_generation(editor: User) 
     assert not element(editor, "generate").enabled
     assert not element(editor, "download-heidenhain").enabled
     await editor.should_see("error: profiles.daily.feed_end: 30000 mm/min exceeds")
+    await editor.should_see(marker="problem-count")  # shown on the closed drawer's icon
+    assert text(editor, "problem-count") == "1"
+
+
+async def test_the_output_button_opens_and_closes_the_drawer(editor: User) -> None:
+    assert text(editor, "output-toggle") == "Output"
+    editor.find(marker="output-toggle").click()
+    assert element(editor, "output-drawer").value is True
+
+    editor.find(marker="output-close").click()
+    assert element(editor, "output-drawer").value is False
 
 
 async def test_an_empty_field_is_reported_as_missing(editor: User) -> None:
@@ -217,6 +230,28 @@ async def test_at_least_one_controller_stays_selected(editor: User) -> None:
 
     assert element(editor, "output-heidenhain").value
     await editor.should_see("At least one controller is needed.")
+
+
+async def test_fanuc_output_needs_a_machine_that_can_run_fanuc(editor: User) -> None:
+    fanuc, tooltip = element(editor, "output-fanuc"), element(editor, "fanuc-unavailable")
+    assert fanuc.enabled
+    assert "disable" in tooltip.props  # no explanation needed
+    change(editor, "output-fanuc", True)
+    change(editor, "output-heidenhain", False)  # Fanuc only
+
+    change(editor, "machine-fanuc", False)
+
+    assert (fanuc.value, fanuc.enabled) == (False, False)
+    assert element(editor, "output-heidenhain").value  # one output stays selected
+    assert "disable" not in tooltip.props  # hovering explains where to turn Fanuc on
+    assert tooltip.text == app.FANUC_UNAVAILABLE
+    assert text(editor, "filename-fanuc") == app.FANUC_UNAVAILABLE  # in the Output drawer too
+    assert text(editor, "status") == "1 program(s) generated and verified against the plan"
+
+    change(editor, "machine-fanuc", True)
+
+    assert (fanuc.value, fanuc.enabled) == (False, True)  # pick it again if wanted
+    assert "disable" in tooltip.props
 
 
 # --- Saving, deleting, switching ------------------------------------------------------------
@@ -431,13 +466,31 @@ async def test_switching_machines_with_unsaved_changes_asks_first(editor: User) 
 # --- Output ---------------------------------------------------------------------------------
 
 
-async def test_generate_writes_the_verified_programs(editor: User, project: Path) -> None:
+async def test_generate_writes_the_verified_programs_and_shows_them(
+    editor: User, project: Path
+) -> None:
     editor.find(marker="generate").click()
     await editor.should_see("Wrote")
 
     written = project / "out" / "heidenhain" / "WARMUP_M1_DAILY.H"
     example = ROOT / "examples" / "heidenhain" / "WARMUP_M1_DAILY.H"
     assert written.read_bytes() == example.read_bytes()
+    assert element(editor, "output-drawer").value is True  # the output opens
+
+
+async def test_the_shown_and_generated_programs_include_unsaved_edits(
+    editor: User, project: Path
+) -> None:
+    change(editor, "profile-feed_end", 11000)  # not saved
+
+    shown = element(editor, "program-heidenhain").markdown.content  # the text on the page
+    assert "FEED 2500-11000 MM/MIN" in shown
+    editor.find(marker="generate").click()
+    await editor.should_see("Wrote")
+
+    written = project / "out" / "heidenhain" / "WARMUP_M1_DAILY.H"
+    assert "FEED 2500-11000 MM/MIN" in written.read_text(encoding="utf-8")
+    assert tomllib.loads(profiles_file(project))["profiles"]["daily"]["feed_end"] == 12000
 
 
 async def test_download_sends_the_program(editor: User) -> None:
